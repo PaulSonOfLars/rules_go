@@ -48,6 +48,13 @@ def _go_prefix(ctx):
     prefix = prefix + "/"
   return prefix
 
+def _prefix_root(ctx):
+  """slash terminated go-prefix"""
+  root = ctx.attr.go_prefix.prefix_root
+  if root != "" and not root.endswith("/"):
+    root = root + "/"
+  return root
+
 # TODO(bazel-team): it would be nice if Bazel had this built-in.
 def symlink_tree_commands(dest_dir, artifact_dict):
   """Symlink_tree_commands returns a list of commands to create the
@@ -165,8 +172,12 @@ def _go_importpath(ctx):
     Go importpath of the library
   """
   path = _go_prefix(ctx)[:-1]
+  prefix_root = _prefix_root(ctx)
   if ctx.label.package:
-    path += "/" + ctx.label.package
+    label = ctx.label.package
+    if ctx.label.package.startswith(prefix_root):
+      label = label[len(prefix_root):]
+    path += "/" + label
   if ctx.label.name != _DEFAULT_LIB:
     path += "/" + ctx.label.name
   if path.rfind(_VENDOR_PREFIX) != -1:
