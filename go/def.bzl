@@ -34,9 +34,21 @@ _DEFAULT_LIB = "go_default_library"
 
 _VENDOR_PREFIX = "/vendor/"
 
-go_filetype = FileType([".go", ".s", ".S"])
+go_filetype = FileType([
+    ".go",
+    ".s",
+    ".S",
+])
+
 # be consistent to cc_library.
-hdr_exts = ['.h', '.hh', '.hpp', '.hxx', '.inc']
+hdr_exts = [
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".inc",
+]
+
 cc_hdr_filetype = FileType(hdr_exts)
 
 ################
@@ -126,11 +138,19 @@ def go_environment_vars(ctx):
                                     "GOARCH": "amd64"})
 
 def _emit_generate_params_action(cmds, ctx, fn):
-  cmds_all = ["set -e"]
+  cmds_all = [
+      # Use bash explicitly. /bin/sh is default, and it may be linked to a
+      # different shell, e.g., /bin/dash on Ubuntu.
+      "#!/bin/bash",
+      "set -e",
+  ]
   cmds_all += cmds
   cmds_all_str = "\n".join(cmds_all) + "\n"
   f = ctx.new_file(ctx.configuration.bin_dir, fn)
-  ctx.file_action( output = f, content = cmds_all_str, executable = True)
+  ctx.file_action(
+      output = f,
+      content = cmds_all_str,
+      executable = True)
   return f
 
 def emit_go_asm_action(ctx, source, out_obj):
@@ -391,8 +411,9 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
     ld = ('../' * out_depth) + ld
   ldflags = _c_linker_options(ctx) + [
       "-Wl,-rpath,$ORIGIN/" + ("../" * pkg_depth),
-      "-L" + prefix,
   ]
+  if prefix:
+    ldflags.append("-L" + prefix)
   for d in cgo_deps:
     if d.basename.endswith('.so'):
       dirname = _short_path(d)[:-len(d.basename)]
@@ -402,6 +423,7 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
       ('../' * out_depth) + ctx.file.go_tool.path,
       "tool", "link", "-L", ".",
       "-o", _go_importpath(ctx),
+      '"${STAMP_XDEFS[@]}"',
   ]
 
   if x_defs:
@@ -425,8 +447,25 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
   # TODO(yugui) Remove this workaround once rules_go stops supporting XCode 7.2
   # or earlier.
   cmds += ["export PATH=$PATH:/usr/bin"]
+
   cmds += [
-    "export GOROOT=$(pwd)/" + ctx.file.go_tool.dirname + "/..",
+      "export GOROOT=$(pwd)/" + ctx.file.go_tool.dirname + "/..",
+      "STAMP_XDEFS=()",
+  ]
+
+  stamp_inputs = []
+  if ctx.attr.linkstamp:
+    # read workspace status files, converting "KEY value" lines
+    # to "-X $linkstamp.KEY=value" arguments to the go linker.
+    stamp_inputs = [ctx.info_file, ctx.version_file]
+    for f in stamp_inputs:
+      cmds += [
+          "while read -r key value || [[ -n $key ]]; do",
+          "  STAMP_XDEFS+=(-X \"%s.$key=$value\")" % ctx.attr.linkstamp,
+          "done < " + f.path,
+      ]
+
+  cmds += [
     "cd " + out_dir,
     ' '.join(link_cmd),
     "mv -f " + _go_importpath(ctx) + " " + ("../" * out_depth) + executable.path,
@@ -436,7 +475,7 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
 
   ctx.action(
       inputs = (list(transitive_libs) + [lib] + list(cgo_deps) +
-                ctx.files.toolchain + ctx.files._crosstool),
+                ctx.files.toolchain + ctx.files._crosstool) + stamp_inputs,
       outputs = [executable],
       executable = f,
       mnemonic = "GoLink",
@@ -565,14 +604,18 @@ go_library_attrs = go_env_attrs + {
         ],
     ),
     "library": attr.label(
-        providers = ["go_sources", "asm_sources", "cgo_object"],
+        providers = [
+            "go_sources",
+            "asm_sources",
+            "cgo_object",
+        ],
     ),
 }
 
 _crosstool_attrs = {
     "_crosstool": attr.label(
         default = Label("//tools/defaults:crosstool"),
-    )
+    ),
 }
 
 go_library_outputs = {
@@ -583,7 +626,10 @@ go_library = rule(
     go_library_impl,
     attrs = go_library_attrs + {
         "cgo_object": attr.label(
-            providers = ["cgo_obj", "cgo_deps"],
+            providers = [
+                "cgo_obj",
+                "cgo_deps",
+            ],
         ),
     },
     fragments = ["cpp"],
@@ -593,7 +639,7 @@ go_library = rule(
 go_binary = rule(
     go_binary_impl,
     attrs = go_library_attrs + _crosstool_attrs + {
-        "stamp": attr.bool(default = False),
+        "linkstamp": attr.string(default = ""),
         "x_defs": attr.string_dict(),
     },
     executable = True,
@@ -611,6 +657,7 @@ go_test = rule(
             ),
             cfg = "host",
         ),
+        "linkstamp": attr.string(default = ""),
         "x_defs": attr.string_dict(),
     },
     executable = True,
@@ -622,7 +669,6 @@ go_test = rule(
     },
     test = True,
 )
-
 
 def _pkg_dir(workspace_root, package_name):
   if workspace_root and package_name:
@@ -724,7 +770,6 @@ _cgo_codegn_rule = rule(
         "copts": attr.string_list(),
         "linkopts": attr.string_list(),
         "outdir": attr.string(mandatory = True),
-
         "outs": attr.output_list(
             mandatory = True,
             non_empty = True,
@@ -831,11 +876,9 @@ _cgo_import = rule(
             allow_files = True,
             single_file = True,
         ),
-
         "out": attr.output(
             mandatory = True,
         ),
-
         "_extract_package": attr.label(
             default = Label("//go/tools/extract_package"),
             executable = True,
@@ -929,13 +972,13 @@ _cgo_object = rule(
             mandatory = True,
             providers = ["cgo_deps"],
         ),
-
         "out": attr.output(
             mandatory = True,
-         )
+        ),
     },
     fragments = ["cpp"],
 )
+
 """Generates _all.o to be archived together with Go objects.
 
 Args:
@@ -963,20 +1006,35 @@ def _setup_cgo_library(name, srcs, cdeps, copts, clinkopts, go_tool, toolchain):
   pkg_dir = _pkg_dir(
       "external/" + REPOSITORY_NAME[1:] if len(REPOSITORY_NAME) > 1 else "",
       PACKAGE_NAME)
+
+  # Platform-specific settings
+  native.config_setting(
+      name = name + "_windows_setting",
+      values = {
+          "cpu": "x64_windows_msvc",
+      },
+  )
+  platform_copts = select({
+      ":" + name + "_windows_setting": ["-mthreads"],
+      "//conditions:default": ["-pthread"],
+  })
+  platform_linkopts = select({
+      ":" + name + "_windows_setting": ["-mthreads"],
+      "//conditions:default": ["-pthread"],
+  })
+
   # Bundles objects into an archive so that _cgo_.o and _all.o can share them.
   native.cc_library(
       name = cgogen.outdir + "/_cgo_lib",
       srcs = cgogen.c_thunks + cgogen.c_exports + c_srcs + c_hdrs,
       deps = cdeps,
-      # TODO(bazel-team): use -mthreads when windows support is added
-      copts = copts + [
+      copts = copts + platform_copts + [
           "-I", pkg_dir,
           "-I", "$(GENDIR)/" + pkg_dir + "/" + cgogen.outdir,
-          "-pthread",
           # The generated thunks often contain unused variables.
           "-Wno-unused-variable",
       ],
-      linkopts = clinkopts,
+      linkopts = clinkopts + platform_linkopts,
       linkstatic = 1,
       # _cgo_.o and _all.o keep all objects in this archive.
       # But it should not be very annoying in the final binary target
@@ -1012,7 +1070,6 @@ def _setup_cgo_library(name, srcs, cdeps, copts, clinkopts, go_tool, toolchain):
       visibility = ["//visibility:private"],
   )
   return cgogen
-
 
 def cgo_genrule(name, srcs,
                 copts=[],
