@@ -24,7 +24,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -85,7 +84,7 @@ func run(dirs []string, emit func(*bzl.File) error, external rules.ExternalResol
 		}
 		for _, f := range files {
 			f.Path = filepath.Join(*repoRoot, f.Path)
-			existingFilePath, err := findBuildFile(path.Dir(f.Path))
+			existingFilePath, err := findBuildFile(filepath.Dir(f.Path))
 			if os.IsNotExist(err) {
 				// No existing file, so write a new one
 				bzl.Rewrite(f, nil) // have buildifier 'format' our rules.
@@ -100,13 +99,17 @@ func run(dirs []string, emit func(*bzl.File) error, external rules.ExternalResol
 			}
 			// Existing file, so merge and maybe remove the old one
 			if f, err = merger.MergeWithExisting(f, existingFilePath); err != nil {
+				if _, ok := err.(merger.GazelleIgnoreError); ok {
+					// found gazelle:ignore comment. Do not rewrite.
+					continue
+				}
 				return err
 			}
 			bzl.Rewrite(f, nil) // have buildifier 'format' our rules.
 			if err := emit(f); err != nil {
 				return err
 			}
-			if f.Path != existingFilePath {
+			if *mode == "fix" && f.Path != existingFilePath {
 				if err := os.Remove(existingFilePath); err != nil {
 					return err
 				}
@@ -119,7 +122,7 @@ func run(dirs []string, emit func(*bzl.File) error, external rules.ExternalResol
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: gazelle [flags...] [package-dirs...]
 
-Gazel is a BUILD file generator for Go projects.
+Gazelle is a BUILD file generator for Go projects.
 
 Currently its primary usage is to generate BUILD files for external dependencies
 in a go_repository rule.

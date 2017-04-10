@@ -20,8 +20,6 @@ load("//go/private:go_prefix.bzl", "go_prefix")
 
 In order of priority:
 
-- No support for build tags
-
 - BUILD file must be written by hand.
 
 - No support for SWIG
@@ -38,6 +36,7 @@ go_filetype = FileType([
     ".go",
     ".s",
     ".S",
+    ".h",  # may be included by .s
 ])
 
 # be consistent to cc_library.
@@ -153,33 +152,43 @@ def _emit_generate_params_action(cmds, ctx, fn):
       executable = True)
   return f
 
-def emit_go_asm_action(ctx, source, out_obj):
+def _emit_go_asm_action(ctx, source, hdrs, out_obj):
   """Construct the command line for compiling Go Assembly code.
   Constructs a symlink tree to accomodate for workspace name.
   Args:
     ctx: The skylark Context.
     source: a source code artifact
+    hdrs: list of .h files that may be included
     out_obj: the artifact (configured target?) that should be produced
   """
-  args = [
-      ctx.file.go_tool.path, "tool", "asm",
+  args = [ctx.file.go_tool.path, "tool", "asm"]
+  include_dirs = set([f.dirname for f in hdrs])
+  for d in include_dirs:
+    args += ["-I", d]
+  args += [
       "-I", ctx.file.go_include.path,
       "-o", out_obj.path,
-      source.path,
   ]
+  asm_cmd = "  " + " ".join(args) + " "
   cmds = [
       "export GOROOT=$(pwd)/" + ctx.file.go_tool.dirname + "/..",
       "mkdir -p " + out_obj.dirname,
-      " ".join(args),
+      "if '%s' -quiet -cgo '%s'; then"
+          % (ctx.executable._filter_tags.path, source.path),
+      "  %s '%s'" % (asm_cmd, source.path),
+      "else",
+      "  %s /dev/null" % asm_cmd,
+      "fi",
   ]
 
   f = _emit_generate_params_action(cmds, ctx, out_obj.path + ".GoAsmCompileFile.params")
 
+  inputs = hdrs + ctx.files.toolchain + [f, source, ctx.executable._filter_tags]
   ctx.action(
-      inputs = [source] + ctx.files.toolchain,
+      inputs = inputs,
       outputs = [out_obj],
       mnemonic = "GoAsmCompile",
-      executable = f,
+      command = f.path,
   )
 
 def _go_importpath(ctx):
@@ -217,7 +226,8 @@ def _is_external(p):
   """Checks if the string starts with ../"""
   return p[0:3] == '../'
 
-def emit_go_compile_action(ctx, sources, deps, out_lib, extra_objects=[]):
+def _emit_go_compile_action(ctx, sources, deps, out_lib,
+                            extra_objects, gc_goopts):
   """Construct the command line for compiling Go code.
   Constructs a symlink tree to accommodate for workspace name.
 
@@ -229,7 +239,10 @@ def emit_go_compile_action(ctx, sources, deps, out_lib, extra_objects=[]):
     out_lib: the artifact (configured target?) that should be produced
     extra_objects: an iterable of extra object files to be added to the
       output archive file.
+    gc_goopts: additional flags to pass to the compiler.
   """
+  # Build a symlink tree so that that deps are in directories that match
+  # their import paths.
   tree_layout = {}
   inputs = []
   for d in deps:
@@ -248,20 +261,53 @@ def emit_go_compile_action(ctx, sources, deps, out_lib, extra_objects=[]):
   if _is_external(out_dir):
     out_depth -= 2
   cmds = symlink_tree_commands(out_dir, tree_layout)
-  args = [
-      "cd ", out_dir, "&&",
-      ('../' * out_depth) + ctx.file.go_tool.path,
-      "tool", "compile",
-      "-o", ('../' * out_depth) + out_lib.path, "-pack",
-      "-I", "."
+
+  # cd into the out_dir.
+  cmds += [
+      'export GOROOT=$(pwd)/%s/..' % ctx.file.go_tool.dirname,
+      'cd ' + out_dir,
   ]
 
+  # Filter source files using build tags.
+  cleaned_go_source_paths = [
+      prefix + _remove_external_prefix(i.path)
+      for i in sources
+      if not i.basename.startswith("_cgo")]
+  cleaned_cgo_source_paths = [
+      prefix + _remove_external_prefix(i.path)
+      for i in sources
+      if i.basename.startswith("_cgo")]
+  filter_tags_path = ('../' * out_depth) + ctx.executable._filter_tags.path
+  cmds += [
+      'UNFILTERED_GO_FILES=(%s)' % 
+          ' '.join(["'%s'" % f for f in cleaned_go_source_paths]),
+      'FILTERED_GO_FILES=(%s)' %
+          ' '.join(["'%s'" % f for f in cleaned_cgo_source_paths]),
+      'while read -r line; do',
+      '  if [ -n "$line" ]; then',
+      '    FILTERED_GO_FILES+=("$line")',
+      '  fi',
+      'done < <(\'%s\' -cgo "${UNFILTERED_GO_FILES[@]}")' % filter_tags_path,
+      'if [ ${#FILTERED_GO_FILES[@]} -eq 0 ]; then',
+      '  echo no buildable Go source files in %s >&1' % str(ctx.label),
+      '  exit 1',
+      'fi',
+  ]
+
+  # Compile filtered files.
+  args = [
+      ("../" * out_depth) + ctx.file.go_tool.path,
+      "tool", "compile",
+      "-o", ("../" * out_depth) + out_lib.path, "-pack",
+      "-I", ".",
+  ] + gc_goopts + ['"${FILTERED_GO_FILES[@]}"']
+
+  # Pack extra objects into an archive, if provided.
   # Set -p to the import path of the library, ie.
   # (ctx.label.package + "/" ctx.label.name) for now.
-  cmds += [ "export GOROOT=$(pwd)/" + ctx.file.go_tool.dirname + "/..",
-    ' '.join(args + [prefix + _remove_external_prefix(i.path) for i in sources])]
-  extra_inputs = ctx.files.toolchain
+  cmds += [' '.join(args)]
 
+  extra_inputs = ctx.files.toolchain
   if extra_objects:
     extra_inputs += extra_objects
     objs = ' '.join([c.path for c in extra_objects])
@@ -271,10 +317,10 @@ def emit_go_compile_action(ctx, sources, deps, out_lib, extra_objects=[]):
   f = _emit_generate_params_action(cmds, ctx, out_lib.path + ".GoCompileFile.params")
 
   ctx.action(
-      inputs = inputs + extra_inputs,
+      inputs = [f] + inputs + extra_inputs + [ctx.executable._filter_tags],
       outputs = [out_lib],
       mnemonic = "GoCompile",
-      executable = f,
+      command = f.path,
       env = go_environment_vars(ctx))
 
 def go_library_impl(ctx):
@@ -283,7 +329,9 @@ def go_library_impl(ctx):
   sources = set(ctx.files.srcs)
   go_srcs = set([s for s in sources if s.basename.endswith('.go')])
   asm_srcs = [s for s in sources if s.basename.endswith('.s') or s.basename.endswith('.S')]
+  asm_hdrs = [s for s in sources if s.basename.endswith('.h')]
   deps = ctx.attr.deps
+  dep_runfiles = [d.data_runfiles for d in deps]
 
   cgo_object = None
   if hasattr(ctx.attr, "cgo_object"):
@@ -292,30 +340,32 @@ def go_library_impl(ctx):
   if ctx.attr.library:
     go_srcs += ctx.attr.library.go_sources
     asm_srcs += ctx.attr.library.asm_sources
+    asm_hdrs += ctx.attr.library.asm_headers
     deps += ctx.attr.library.direct_deps
+    dep_runfiles += [ctx.attr.library.data_runfiles]
     if ctx.attr.library.cgo_object:
       if cgo_object:
         fail("go_library %s cannot have cgo_object because the package " +
              "already has cgo_object in %s" % (ctx.label.name,
                                                ctx.attr.library.name))
       cgo_object = ctx.attr.library.cgo_object
-
   if not go_srcs:
     fail("may not be empty", "srcs")
 
   transitive_cgo_deps = set([], order="link")
   if cgo_object:
+    dep_runfiles += [cgo_object.data_runfiles]
     transitive_cgo_deps += cgo_object.cgo_deps
 
   extra_objects = [cgo_object.cgo_obj] if cgo_object else []
   for src in asm_srcs:
     obj = ctx.new_file(src, "%s.dir/%s.o" % (ctx.label.name, src.basename[:-2]))
-    emit_go_asm_action(ctx, src, obj)
+    _emit_go_asm_action(ctx, src, asm_hdrs, obj)
     extra_objects += [obj]
 
   out_lib = ctx.outputs.lib
-  emit_go_compile_action(ctx, go_srcs, deps, out_lib,
-                         extra_objects=extra_objects)
+  gc_goopts = _gc_goopts(ctx)
+  _emit_go_compile_action(ctx, go_srcs, deps, out_lib, extra_objects, gc_goopts)
 
   transitive_libs = set([out_lib])
   transitive_importmap = {out_lib.path: _go_importpath(ctx)}
@@ -329,6 +379,9 @@ def go_library_impl(ctx):
     dylibs += [d for d in cgo_object.cgo_deps if d.path.endswith(".so")]
 
   runfiles = ctx.runfiles(files = dylibs, collect_data = True)
+  for d in dep_runfiles:
+    runfiles = runfiles.merge(d)
+
   return struct(
     label = ctx.label,
     files = set([out_lib]),
@@ -336,11 +389,13 @@ def go_library_impl(ctx):
     runfiles = runfiles,
     go_sources = go_srcs,
     asm_sources = asm_srcs,
+    asm_headers = asm_hdrs,
     go_library_object = out_lib,
     transitive_go_library_object = transitive_libs,
     cgo_object = cgo_object,
     transitive_cgo_deps = transitive_cgo_deps,
-    transitive_go_importmap = transitive_importmap
+    transitive_go_importmap = transitive_importmap,
+    gc_goopts = gc_goopts,
   )
 
 def _c_linker_options(ctx, blacklist=[]):
@@ -382,8 +437,46 @@ def _short_path(f):
     fail("file name %s is not prefixed with its root %s", f.path, prefix)
   return f.path[len(prefix):]
 
-def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
-                        executable, x_defs={}):
+def _gc_goopts(ctx):
+  gc_goopts = [ctx.expand_make_variables("gc_goopts", f, {})
+               for f in ctx.attr.gc_goopts]
+  if ctx.attr.library:
+    gc_goopts += ctx.attr.library.gc_goopts
+  return gc_goopts
+
+def _gc_linkopts(ctx):
+  gc_linkopts = [ctx.expand_make_variables("gc_linkopts", f, {})
+                 for f in ctx.attr.gc_linkopts]
+  for k, v in ctx.attr.x_defs.items():
+    gc_linkopts += ["-X", "%s='%s'" % (k, v)]
+  return gc_linkopts
+
+def _extract_extldflags(gc_linkopts, extldflags):
+  """Extracts -extldflags from gc_linkopts and combines them into a single list.
+
+  Args:
+    gc_linkopts: a list of flags passed in through the gc_linkopts attributes.
+      ctx.expand_make_variables should have already been applied.
+    extldflags: a list of flags to be passed to the external linker.
+
+  Return:
+    A tuple containing the filtered gc_linkopts with external flags removed,
+    and a combined list of external flags.
+  """
+  filtered_gc_linkopts = []
+  is_extldflags = False
+  for opt in gc_linkopts:
+    if is_extldflags:
+      is_extldflags = False
+      extldflags += [opt]
+    elif opt == "-extldflags":
+      is_extldflags = True
+    else:
+      filtered_gc_linkopts += [opt]
+  return filtered_gc_linkopts, extldflags
+
+def _emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
+                         executable, gc_linkopts):
   """Sets up a symlink tree to libraries to link together."""
   out_dir = executable.path + ".dir"
   out_depth = out_dir.count('/') + 1
@@ -409,25 +502,22 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
   ld = "%s" % ctx.fragments.cpp.compiler_executable
   if ld[0] != '/':
     ld = ('../' * out_depth) + ld
-  ldflags = _c_linker_options(ctx) + [
+  extldflags = _c_linker_options(ctx) + [
       "-Wl,-rpath,$ORIGIN/" + ("../" * pkg_depth),
   ]
   if prefix:
-    ldflags.append("-L" + prefix)
+    extldflags.append("-L" + prefix)
   for d in cgo_deps:
     if d.basename.endswith('.so'):
       dirname = _short_path(d)[:-len(d.basename)]
-      ldflags += ["-Wl,-rpath,$ORIGIN/" + ("../" * pkg_depth) + dirname]
+      extldflags += ["-Wl,-rpath,$ORIGIN/" + ("../" * pkg_depth) + dirname]
+  gc_linkopts, extldflags = _extract_extldflags(gc_linkopts, extldflags)
 
   link_cmd = [
       ('../' * out_depth) + ctx.file.go_tool.path,
       "tool", "link", "-L", ".",
       "-o", _go_importpath(ctx),
-      '"${STAMP_XDEFS[@]}"',
-  ]
-
-  if x_defs:
-    link_cmd += [" -X %s='%s' " % (k, v) for k,v in x_defs.items()]
+  ] + gc_linkopts + ['"${STAMP_XDEFS[@]}"']
 
   # workaround for a bug in ld(1) on Mac OS X.
   # http://lists.apple.com/archives/Darwin-dev/2006/Sep/msg00084.html
@@ -438,7 +528,7 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
 
   link_cmd += [
       "-extld", ld,
-      "-extldflags", "'%s'" % " ".join(ldflags),
+      "-extldflags", "'%s'" % " ".join(extldflags),
       main_archive,
   ]
 
@@ -474,10 +564,10 @@ def emit_go_link_action(ctx, importmap, transitive_libs, cgo_deps, lib,
   f = _emit_generate_params_action(cmds, ctx, lib.path + ".GoLinkFile.params")
 
   ctx.action(
-      inputs = (list(transitive_libs) + [lib] + list(cgo_deps) +
+      inputs = [f] + (list(transitive_libs) + [lib] + list(cgo_deps) +
                 ctx.files.toolchain + ctx.files._crosstool) + stamp_inputs,
       outputs = [executable],
-      executable = f,
+      command = f.path,
       mnemonic = "GoLink",
       env = go_environment_vars(ctx))
 
@@ -487,18 +577,16 @@ def go_binary_impl(ctx):
   executable = ctx.outputs.executable
   lib_out = ctx.outputs.lib
 
-  emit_go_link_action(
+  _emit_go_link_action(
     ctx,
     transitive_libs=lib_result.transitive_go_library_object,
     importmap=lib_result.transitive_go_importmap,
     cgo_deps=lib_result.transitive_cgo_deps,
     lib=lib_out, executable=executable,
-    x_defs=ctx.attr.x_defs)
+    gc_linkopts=_gc_linkopts(ctx))
 
-  runfiles = ctx.runfiles(collect_data = True,
-                          files = ctx.files.data)
   return struct(files = set([executable]) + lib_result.files,
-                runfiles = runfiles,
+                runfiles = lib_result.runfiles,
                 cgo_object = lib_result.cgo_object)
 
 def go_test_impl(ctx):
@@ -510,40 +598,61 @@ def go_test_impl(ctx):
   lib_result = go_library_impl(ctx)
   main_go = ctx.outputs.main_go
   prefix = _go_prefix(ctx)
-
   go_import = _go_importpath(ctx)
 
-  args = (["--package", go_import, "--output", ctx.outputs.main_go.path] +
-          [i.path for i in lib_result.go_sources])
-
-  inputs = list(lib_result.go_sources) + list(ctx.files.toolchain)
+  cmds = [
+      'UNFILTERED_TEST_FILES=(%s)' %
+          ' '.join(["'%s'" % f.path for f in lib_result.go_sources]),
+      'FILTERED_TEST_FILES=()',
+      'while read -r line; do',
+      '  if [ -n "$line" ]; then',
+      '    FILTERED_TEST_FILES+=("$line")',
+      '  fi',
+      'done < <(\'%s\' -cgo "${UNFILTERED_TEST_FILES[@]}")' %
+          ctx.executable._filter_tags.path,
+      ' '.join([
+          "'%s'" % ctx.executable.test_generator.path,
+          '--package',
+          go_import,
+          '--output',
+          "'%s'" % ctx.outputs.main_go.path,
+          '"${FILTERED_TEST_FILES[@]}"',
+      ]),
+  ]
+  f = _emit_generate_params_action(
+      cmds, ctx, main_go.path + ".GoTestGenTest.params")
+  inputs = (list(lib_result.go_sources) + list(ctx.files.toolchain) +
+            [f, ctx.executable._filter_tags, ctx.executable.test_generator])
   ctx.action(
       inputs = inputs,
-      executable = ctx.executable.test_generator,
       outputs = [main_go],
+      command = f.path,
       mnemonic = "GoTestGenTest",
-      arguments = args,
       env = dict(go_environment_vars(ctx), RUNDIR=ctx.label.package))
 
-  emit_go_compile_action(
-    ctx, set([main_go]), ctx.attr.deps + [lib_result], ctx.outputs.main_lib)
+  _emit_go_compile_action(
+    ctx,
+    sources=set([main_go]),
+    deps=ctx.attr.deps + [lib_result],
+    out_lib=ctx.outputs.main_lib,
+    extra_objects=[],
+    gc_goopts=_gc_goopts(ctx))
 
   importmap = lib_result.transitive_go_importmap + {
       ctx.outputs.main_lib.path: _go_importpath(ctx) + "_main_test"}
-  emit_go_link_action(
+  _emit_go_link_action(
     ctx,
     importmap=importmap,
     transitive_libs=lib_result.transitive_go_library_object,
     cgo_deps=lib_result.transitive_cgo_deps,
     lib=ctx.outputs.main_lib, executable=ctx.outputs.executable,
-    x_defs=ctx.attr.x_defs)
+    gc_linkopts=_gc_linkopts(ctx))
 
   # TODO(bazel-team): the Go tests should do a chdir to the directory
   # holding the data files, so open-source go tests continue to work
   # without code changes.
-  runfiles = ctx.runfiles(collect_data = True,
-                          files = (ctx.files.data + [ctx.outputs.executable] +
-                                   list(lib_result.runfiles.files)))
+  runfiles = ctx.runfiles(files = [ctx.outputs.executable])
+  runfiles = runfiles.merge(lib_result.runfiles)
   return struct(runfiles=runfiles)
 
 go_env_attrs = {
@@ -586,6 +695,12 @@ go_env_attrs = {
         allow_files = False,
         cfg = "host",
     ),
+    "_filter_tags": attr.label(
+        default = Label("//go/tools/filter_tags"),
+        cfg = "host",
+        executable = True,
+        single_file = True,
+    ),
 }
 
 go_library_attrs = go_env_attrs + {
@@ -608,14 +723,22 @@ go_library_attrs = go_env_attrs + {
             "go_sources",
             "asm_sources",
             "cgo_object",
+            "gc_goopts",
         ],
     ),
+    "gc_goopts": attr.string_list(),
 }
 
 _crosstool_attrs = {
     "_crosstool": attr.label(
         default = Label("//tools/defaults:crosstool"),
     ),
+}
+
+go_link_attrs = go_library_attrs + _crosstool_attrs + {
+    "gc_linkopts": attr.string_list(),
+    "linkstamp": attr.string(),
+    "x_defs": attr.string_dict(),
 }
 
 go_library_outputs = {
@@ -638,10 +761,7 @@ go_library = rule(
 
 go_binary = rule(
     go_binary_impl,
-    attrs = go_library_attrs + _crosstool_attrs + {
-        "linkstamp": attr.string(default = ""),
-        "x_defs": attr.string_dict(),
-    },
+    attrs = go_library_attrs + _crosstool_attrs + go_link_attrs,
     executable = True,
     fragments = ["cpp"],
     outputs = go_library_outputs,
@@ -649,7 +769,7 @@ go_binary = rule(
 
 go_test = rule(
     go_test_impl,
-    attrs = go_library_attrs + _crosstool_attrs + {
+    attrs = go_library_attrs + _crosstool_attrs + go_link_attrs + {
         "test_generator": attr.label(
             executable = True,
             default = Label(
@@ -657,8 +777,6 @@ go_test = rule(
             ),
             cfg = "host",
         ),
-        "linkstamp": attr.string(default = ""),
-        "x_defs": attr.string_dict(),
     },
     executable = True,
     fragments = ["cpp"],
@@ -685,7 +803,8 @@ def _exec_path(path):
   return '${execroot}/' + path
 
 def _cgo_codegen_impl(ctx):
-  srcs = ctx.files.srcs + ctx.files.c_hdrs
+  go_srcs = ctx.files.srcs
+  srcs = go_srcs + ctx.files.c_hdrs
   linkopts = ctx.attr.linkopts
   copts = ctx.fragments.cpp.c_options + ctx.attr.copts
   deps = set([], order="link")
@@ -719,30 +838,44 @@ def _cgo_codegen_impl(ctx):
              p + ctx.attr.outdir)
   cc = ctx.fragments.cpp.compiler_executable
   cmds = symlink_tree_commands(out_dir + "/src", tree_layout) + [
-      "export GOROOT=$(pwd)/" + ctx.file.go_tool.dirname + "/..",
+      'export GOROOT=$(pwd)/' + ctx.file.go_tool.dirname + '/..',
       # We cannot use env for CC because $(CC) on OSX is relative
       # and '../' does not work fine due to symlinks.
-      "export CC=$(cd $(dirname {cc}); pwd)/$(basename {cc})".format(cc=cc),
-      "export CXX=$CC",
-      "execroot=$(pwd)",
-      "objdir=$(pwd)/%s/gen" % out_dir,
-      "mkdir -p $objdir",
+      'export CC=$(cd $(dirname {cc}); pwd)/$(basename {cc})'.format(cc=cc),
+      'export CXX=$CC',
+      'execroot=$(pwd)',
+      'filter_tags="$execroot/%s"' % ctx.executable._filter_tags.path,
+      'objdir="$(pwd)/%s/gen"' % out_dir,
+      'mkdir -p "$objdir"',
       # The working directory must be the directory of the target go package
       # to prevent cgo from prefixing mangled directory names to the output
       # files.
-      "cd %s/src/$(dirname %s)" % (out_dir, _short_path(ctx.files.srcs[0])),
-      ' '.join(["$GOROOT/bin/go", "tool", "cgo", "-objdir", "$objdir", "--"] +
-               copts + [f.basename for f in ctx.files.srcs]),
-      "rm -f $objdir/_cgo_.o $objdir/_cgo_flags"]
+      # TODO(#350): this causes errors if sources are in multiple directories.
+      'cd "%s/src/$(dirname %s)"' % (out_dir, _short_path(ctx.files.srcs[0])),
+      'unfiltered_go_files=(%s)' % ' '.join(["'%s'" % f.basename for f in go_srcs]),
+      'filtered_go_files=()',
+      'for file in "${unfiltered_go_files[@]}"; do',
+      '  if "$filter_tags" -cgo -quiet "$file"; then',
+      '    filtered_go_files+=("$file")',
+      '  else',
+      '    grep --max-count 1 "^package " "$file" >"$objdir/$(basename "$file" .go).cgo1.go"',
+      '    echo -n >"$objdir/$(basename "$file" .go).cgo2.c"',
+      '  fi',
+      'done',
+      '"$GOROOT/bin/go" tool cgo -objdir "$objdir" -- %s "${filtered_go_files[@]}"' %
+          ' '.join(['"%s"' % copt for copt in copts]),
+      'rm -f $objdir/_cgo_.o $objdir/_cgo_flags']
 
   f = _emit_generate_params_action(cmds, ctx, out_dir + ".CGoCodeGenFile.params")
 
+  inputs = (srcs + ctx.files.toolchain + ctx.files._crosstool +
+            [f, ctx.executable._filter_tags])
   ctx.action(
-      inputs = srcs + ctx.files.toolchain + ctx.files._crosstool,
+      inputs = inputs,
       outputs = ctx.outputs.outs,
       mnemonic = "CGoCodeGen",
       progress_message = "CGoCodeGen %s" % ctx.label,
-      executable = f,
+      command = f.path,
       env = go_environment_vars(ctx) + {
           "CGO_LDFLAGS": " ".join(linkopts),
       },
@@ -855,10 +988,10 @@ def _cgo_import_impl(ctx):
   f = _emit_generate_params_action(cmds, ctx, ctx.outputs.out.path + ".CGoImportGenFile.params")
   ctx.action(
       inputs = (ctx.files.toolchain +
-                [ctx.file.go_tool, ctx.executable._extract_package,
+                [f, ctx.file.go_tool, ctx.executable._extract_package,
                  ctx.file.cgo_o, ctx.file.sample_go_src]),
       outputs = [ctx.outputs.out],
-      executable = f,
+      command = f.path,
       mnemonic = "CGoImportGen",
   )
   return struct(
@@ -892,8 +1025,10 @@ def _cgo_genrule_impl(ctx):
     label = ctx.label,
     go_sources = ctx.files.srcs,
     asm_sources = [],
+    asm_headers = [],
     cgo_object = ctx.attr.cgo_object,
     direct_deps = ctx.attr.deps,
+    gc_goopts = [],
   )
 
 _cgo_genrule = rule(
@@ -955,10 +1090,13 @@ def _cgo_object_impl(ctx):
       executable = ctx.fragments.cpp.compiler_executable,
       arguments = arguments,
   )
+  runfiles = ctx.runfiles(collect_data = True)
+  runfiles = runfiles.merge(ctx.attr.src.data_runfiles)
   return struct(
       files = set([ctx.outputs.out]),
       cgo_obj = ctx.outputs.out,
       cgo_deps = ctx.attr.cgogen.cgo_deps,
+      runfiles = runfiles,
   )
 
 _cgo_object = rule(
