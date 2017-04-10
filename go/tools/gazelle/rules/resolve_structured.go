@@ -14,7 +14,6 @@ limitations under the License.
 */
 
 package rules
-
 import (
 	"fmt"
 	"path"
@@ -25,6 +24,7 @@ import (
 // the one of goPrefix.
 type structuredResolver struct {
 	goPrefix string
+	prefixRoot string
 }
 
 // resolve takes a Go importpath within the same respository as r.goPrefix
@@ -38,12 +38,25 @@ func (r structuredResolver) resolve(importpath, dir string) (label, error) {
 		return label{name: defaultLibName}, nil
 	}
 
+
 	if prefix := r.goPrefix + "/"; strings.HasPrefix(importpath, prefix) {
 		pkg := strings.TrimPrefix(importpath, prefix)
+
+		// Improbable proto hacks
+		if strings.HasPrefix(pkg, "proto") {
+			return label{pkg: pkg, name: defaultLibName}, nil
+		}
+
 		if pkg == dir {
 			return label{name: defaultLibName, relative: true}, nil
 		}
-		return label{pkg: pkg, name: defaultLibName}, nil
+
+		// Make sure prefix root ends with a slash
+		prefixRoot := r.prefixRoot
+		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
+			prefixRoot += "/"
+		}
+		return label{pkg: prefixRoot + pkg, name: defaultLibName}, nil
 	}
 
 	return label{}, fmt.Errorf("importpath %q does not start with goPrefix %q", importpath, r.goPrefix)

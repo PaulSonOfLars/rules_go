@@ -40,6 +40,7 @@ var (
 	buildTags      = flag.String("build_tags", "", "comma-separated list of build tags. If not specified, GOOS and GOARCH are used.")
 	external       = flag.String("external", "external", "external: resolve external packages with new_go_repository\n\tvendored: resolve external packages as packages in vendor/")
 	goPrefix       = flag.String("go_prefix", "", "go_prefix of the target workspace")
+	prefixRoot     = flag.String("prefix_root", "", "prefix_root of the target workspace")
 	repoRoot       = flag.String("repo_root", "", "path to a directory which corresponds to go_prefix, otherwise gazelle searches for it.")
 	mode           = flag.String("mode", "fix", "print: prints all of the updated BUILD files\n\tfix: rewrites all of the BUILD files in place\n\tdiff: computes the rewrite but then just does a diff")
 	buildFileNames = []string{"BUILD.bazel", "BUILD"}
@@ -72,7 +73,7 @@ func isValidBuildFileName(buildFileName string) bool {
 }
 
 func run(dirs []string, emit func(*bzl.File) error, external rules.ExternalResolver) error {
-	g, err := generator.New(*repoRoot, *goPrefix, *buildFileName, *buildTags, external)
+	g, err := generator.New(*repoRoot, *goPrefix, *prefixRoot, *buildFileName, *buildTags, external)
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,7 @@ func main() {
 	}
 	if *goPrefix == "" {
 		var err error
-		if *goPrefix, err = loadGoPrefix(*repoRoot); err != nil {
+		if *goPrefix, *prefixRoot, err = loadGoPrefix(*repoRoot); err != nil {
 			if !os.IsNotExist(err) {
 				log.Fatal(err)
 			}
@@ -201,18 +202,18 @@ func findBuildFile(repo string) (string, error) {
 	return "", os.ErrNotExist
 }
 
-func loadGoPrefix(repo string) (string, error) {
+func loadGoPrefix(repo string) (string, string, error) {
 	p, err := findBuildFile(repo)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	b, err := ioutil.ReadFile(p)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	f, err := bzl.Parse(p, b)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, s := range f.Stmt {
 		c, ok := s.(*bzl.CallExpr)
@@ -226,16 +227,25 @@ func loadGoPrefix(repo string) (string, error) {
 		if l.Token != "go_prefix" {
 			continue
 		}
-		if len(c.List) != 1 {
-			return "", fmt.Errorf("found go_prefix(%v) with too many args", c.List)
+		if len(c.List) > 2 {
+			return "", "", fmt.Errorf("found go_prefix(%v) with too many args", c.List)
 		}
 		v, ok := c.List[0].(*bzl.StringExpr)
 		if !ok {
-			return "", fmt.Errorf("found go_prefix(%v) which is not a string", c.List)
+			return "", "", fmt.Errorf("found go_prefix(%v) which is not a string", c.List)
 		}
-		return v.Value, nil
+
+		prefixRoot := ""
+		if len(c.List) > 1 {
+			prefixRootExpr, ok := c.List[1].(*bzl.StringExpr)
+			if !ok {
+				return "", "", fmt.Errorf("found go_prefix(%v) with prefix root which is not a string", c.List)
+			}
+			prefixRoot = prefixRootExpr.Value
+		}
+		return v.Value, prefixRoot, nil
 	}
-	return "", errors.New("-go_prefix not set, and no go_prefix in root BUILD file")
+	return "", "", errors.New("-go_prefix not set, and no go_prefix in root BUILD file")
 }
 
 func repo(args []string) (string, error) {
