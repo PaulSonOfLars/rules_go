@@ -19,11 +19,13 @@ repository_tool_deps = {
         importpath = 'github.com/bazelbuild/buildifier',
         repo = 'https://github.com/bazelbuild/buildtools',
         commit = '81c36a8418cb803d381335c95f8bb419ad1efa27',
+        sha256 = 'beadf36cd4fdb64e97bf68a73b1c6fd30abdbab4fc1f95be1046adad42f54dcf',
     ),
     'tools': struct(
         importpath = 'golang.org/x/tools',
         repo = 'https://github.com/golang/tools',
         commit = '3d92dd60033c312e3ae7cac319c792271cf67e37',
+        sha256 = 'e21212ccbd08e265ba2a6abec94abe506d0675267ee89abc7574902f2b53e884',
     )
 }
 
@@ -55,7 +57,7 @@ def _fetch_repository_tools_deps(ctx, goroot, gopath):
       fail('failed to create directory: %s' % result.stderr)
     ctx.download_and_extract(
         '%s/archive/%s.zip' % (dep.repo, dep.commit),
-        'src/%s' % dep.importpath, '', 'zip', '%s-%s' % (name, dep.commit))
+        'src/%s' % dep.importpath, dep.sha256, 'zip', '%s-%s' % (name, dep.commit))
 
   result = ctx.execute([
       'env', 'GOROOT=%s' % goroot, 'GOPATH=%s' % gopath, 'PATH=%s/bin' % goroot,
@@ -84,6 +86,7 @@ def _go_repository_tools_impl(ctx):
   prefix = "github.com/bazelbuild/rules_go/" + ctx.attr._tools.package
   src_path = ctx.path(ctx.attr._tools).dirname
 
+  print(goroot, gopath)
   _fetch_repository_tools_deps(ctx, goroot, gopath)
 
   for t, pkg in [("gazelle", 'gazelle/gazelle'), ("fetch_repo", "fetch_repo")]:
