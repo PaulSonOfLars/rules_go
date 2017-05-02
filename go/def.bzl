@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("//go/private:go_repositories.bzl", "go_repositories")
-load("//go/private:go_repository.bzl", "go_repository", "new_go_repository")
+load("//go/private:go_repository.bzl", "go_repository", "new_go_repository", "new_go_github_repository", "go_github_repository")
 load("//go/private:go_prefix.bzl", "go_prefix")
 
 """These are bare-bones Go rules.
