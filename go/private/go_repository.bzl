@@ -151,6 +151,7 @@ def _new_go_github_repository_impl(ctx):
 
   if ctx.attr.build_file_name:
     cmd += ["--build_file_name", ctx.attr.build_file_name]
+    cmd += ["--valid_build_file_names", ctx.attr.build_file_name]
   
   cmd += [ctx.path('')]
 
