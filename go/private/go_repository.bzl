@@ -134,6 +134,28 @@ def new_go_repository(name, **kwargs):
   print("{0}: new_go_repository is deprecated. Please migrate to go_repository soon.".format(name))
   return go_repository(name=name, **kwargs)
 
+def go_github_repository(name, repository_id, commit, sha256="", build_file_name="", importpath=""):
+  return go_github_rule(name, repository_id, commit, "off", sha256, build_file_name, importpath)
+
+def new_go_github_repository(name, repository_id, commit, sha256="", build_file_name="", importpath=""):
+  return go_github_rule(name, repository_id, commit, "on", sha256, build_file_name, importpath)
+
+def go_github_rule(name, repository_id, commit, build_file_generation, sha256="", build_file_name="", importpath=""):
+  url = "https://github.com/%s/archive/%s.tar.gz" % (repository_id, commit)
+  repository_user, repository_name = repository_id.split("/")
+  if importpath == "":
+    importpath = "github.com/%s" % (repository_id)
+  return go_repository(
+    name = name,
+    urls = [url],
+    sha256 = sha256,
+    strip_prefix = "%s-%s" % (repository_name, commit),
+    type = "tar.gz",
+    build_file_name=build_file_name,
+    importpath=importpath,
+    build_file_generation=build_file_generation,
+  )
+
 def env_execute(ctx, arguments, environment = None, **kwargs):
   """env_execute prepends "env -i" to "arguments" before passing it to
   ctx.execute.
