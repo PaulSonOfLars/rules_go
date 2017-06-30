@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("@io_bazel_rules_go//go/private:repositories.bzl", "go_repositories")
-load("@io_bazel_rules_go//go/private:go_repository.bzl", "go_repository", "new_go_repository")
+load("@io_bazel_rules_go//go/private:go_repository.bzl", "go_repository", "new_go_repository", "go_github_repository", "new_go_github_repository")
 load("@io_bazel_rules_go//go/private:go_prefix.bzl", "go_prefix")
 load("@io_bazel_rules_go//go/private:library.bzl", "go_library")
 load("@io_bazel_rules_go//go/private:binary.bzl", "go_binary")
