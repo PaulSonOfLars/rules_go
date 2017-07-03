@@ -52,7 +52,7 @@ func (r structuredResolver) Resolve(importpath, dir string) (Label, error) {
 		if pkg == dir {
 			return Label{Name: config.DefaultLibName, Relative: true}, nil
 		}
-		
+
 		// Make sure prefix root ends with a slash
 		prefixRoot := r.prefixRoot
 		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
