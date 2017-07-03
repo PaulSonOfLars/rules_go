@@ -41,10 +41,16 @@ func (r structuredResolver) resolve(importpath, dir string) (label, error) {
 
 	if prefix := r.goPrefix + "/"; strings.HasPrefix(importpath, prefix) {
 		pkg := strings.TrimPrefix(importpath, prefix)
+
+		// Improbable proto hacks
+		if strings.HasPrefix(pkg, "proto") {
+			return label{pkg: pkg, name: defaultLibName}, nil
+		}
+
 		if pkg == dir {
 			return label{name: defaultLibName, relative: true}, nil
 		}
-		
+
 		// Make sure prefix root ends with a slash
 		prefixRoot := r.prefixRoot
 		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
