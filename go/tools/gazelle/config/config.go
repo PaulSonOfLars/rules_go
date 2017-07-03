@@ -45,6 +45,9 @@ type Config struct {
 	// This is used to map imports to labels within the repository.
 	GoPrefix string
 
+	// prefix_root of the target workspace	
+	PrefixRoot string
+
 	// DepMode determines how imports outside of GoPrefix are resolved.
 	DepMode DependencyMode
 }
