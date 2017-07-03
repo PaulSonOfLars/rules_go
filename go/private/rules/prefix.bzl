@@ -22,19 +22,24 @@
 
 def _go_prefix_impl(ctx):
   """go_prefix_impl provides the go prefix to use as a transitive info provider."""
-  return struct(go_prefix = ctx.attr.prefix)
+  return struct(go_prefix = ctx.attr.prefix, prefix_root = ctx.attr.prefix_root)
 
 _go_prefix_rule = rule(
     _go_prefix_impl,
     attrs = {
         "prefix": attr.string(mandatory = True),
+        "prefix_root": attr.string(default = ""),
     },
 )
 
-def go_prefix(prefix):
-  """go_prefix sets the Go import name to be used for this workspace."""
+def go_prefix(prefix, prefix_root=""):
+  """
+    go_prefix sets the Go import name to be used for this workspace.
+    prefix_root (optional) - subdirectory within the workspace in which go code is located
+  """
   _go_prefix_rule(name = "go_prefix",
     prefix = prefix,
+    prefix_root = prefix_root,
     visibility = ["//visibility:public" ]
   )
 
