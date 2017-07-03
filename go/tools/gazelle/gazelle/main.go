@@ -161,6 +161,7 @@ func newConfiguration(args []string) (*config.Config, emitFunc, error) {
 	buildTags := fs.String("build_tags", "", "comma-separated list of build tags. If not specified, Gazelle will not\n\tfilter sources with build constraints.")
 	external := fs.String("external", "external", "external: resolve external packages with go_repository\n\tvendored: resolve external packages as packages in vendor/")
 	goPrefix := fs.String("go_prefix", "", "go_prefix of the target workspace")
+	prefixRoot := fs.String("prefix_root", "", "prefix_root of the target workspace")
 	repoRoot := fs.String("repo_root", "", "path to a directory which corresponds to go_prefix, otherwise gazelle searches for it.")
 	mode := fs.String("mode", "fix", "print: prints all of the updated BUILD files\n\tfix: rewrites all of the BUILD files in place\n\tdiff: computes the rewrite but then just does a diff")
 	if err := fs.Parse(args); err != nil {
@@ -232,6 +233,8 @@ func newConfiguration(args []string) (*config.Config, emitFunc, error) {
 			return nil, nil, fmt.Errorf("-go_prefix not set and not root BUILD file found")
 		}
 	}
+
+	c.PrefixRoot = *prefixRoot
 
 	c.DepMode, err = config.DependencyModeFromString(*external)
 	if err != nil {

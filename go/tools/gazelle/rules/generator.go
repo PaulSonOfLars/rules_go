@@ -60,7 +60,7 @@ func NewGenerator(c *config.Config) Generator {
 	var (
 		// TODO(yugui) Support another resolver to cover the pattern 2 in
 		// https://github.com/bazelbuild/rules_go/issues/16#issuecomment-216010843
-		r = structuredResolver{goPrefix: c.GoPrefix}
+		r = structuredResolver{goPrefix: c.GoPrefix, prefixRoot: c.PrefixRoot}
 	)
 
 	var e labelResolver
