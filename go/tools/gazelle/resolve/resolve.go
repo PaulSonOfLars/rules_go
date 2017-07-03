@@ -65,7 +65,7 @@ func NewLabelResolver(c *config.Config) LabelResolver {
 
 	return &unifiedResolver{
 		goPrefix: c.GoPrefix,
-		local:    structuredResolver{c.GoPrefix},
+		local:    structuredResolver{goPrefix: c.GoPrefix, prefixRoot: c.PrefixRoot},
 		external: e,
 	}
 }

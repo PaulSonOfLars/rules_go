@@ -27,6 +27,7 @@ import (
 // the one of goPrefix.
 type structuredResolver struct {
 	goPrefix string
+	prefixRoot string
 }
 
 // Resolve takes a Go importpath within the same respository as r.goPrefix
@@ -42,10 +43,22 @@ func (r structuredResolver) Resolve(importpath, dir string) (Label, error) {
 
 	if prefix := r.goPrefix + "/"; strings.HasPrefix(importpath, prefix) {
 		pkg := strings.TrimPrefix(importpath, prefix)
+
+		// Improbable proto hacks
+		if strings.HasPrefix(pkg, "proto") {
+			return Label{Pkg: pkg, Name: config.DefaultLibName}, nil
+		}
+
 		if pkg == dir {
 			return Label{Name: config.DefaultLibName, Relative: true}, nil
 		}
-		return Label{Pkg: pkg, Name: config.DefaultLibName}, nil
+		
+		// Make sure prefix root ends with a slash
+		prefixRoot := r.prefixRoot
+		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
+			prefixRoot += "/"
+		}
+		return Label{Pkg: prefixRoot + pkg, Name: config.DefaultLibName}, nil
 	}
 
 	return Label{}, fmt.Errorf("importpath %q does not start with goPrefix %q", importpath, r.goPrefix)
