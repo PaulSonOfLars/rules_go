@@ -170,6 +170,13 @@ go_library = rule(
     fragments = ["cpp"],
 )
 
+def _prefix_root(ctx):
+  """slash terminated go-prefix"""
+  root = ctx.attr._go_prefix.prefix_root
+  if root != "" and not root.endswith("/"):
+    root = root + "/"
+  return root
+
 def go_importpath(ctx):
   """Returns the expected importpath of the go_library being built.
 
@@ -186,7 +193,11 @@ def go_importpath(ctx):
   if path.endswith("/"):
     path = path[:-1]
   if ctx.label.package:
-    path += "/" + ctx.label.package
+    prefix_root = _prefix_root(ctx)
+    label = ctx.label.package
+    if ctx.label.package.startswith(prefix_root):
+      label = label[len(prefix_root):]
+    path += "/" + label
   if ctx.label.name != DEFAULT_LIB:
     path += "/" + ctx.label.name
   if path.rfind(VENDOR_PREFIX) != -1:
