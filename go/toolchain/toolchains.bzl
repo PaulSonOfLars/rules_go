@@ -35,6 +35,7 @@ def generate_toolchains():
   
   constraint_value(name = "go1", setting = ":go_version")
   constraint_value(name = "go1.8", setting = ":go_minor_version")
+  constraint_value(name = "go1.8.4", setting = ":go_point_version")  
   constraint_value(name = "go1.8.3", setting = ":go_point_version")
   constraint_value(name = "go1.8.2", setting = ":go_point_version")
   constraint_value(name = "go1.8.1", setting = ":go_point_version")
@@ -103,6 +104,10 @@ def generate_toolchains():
   # The set of acceptable hosts for each of the go versions, this is essentially the
   # set of sdk's we know how to fetch
   versions = [
+      struct(
+          semver = [1,8,4],
+          hosts = [darwin_amd64, linux_386, linux_amd64, windows_386, windows_amd64, freebsd_386, freebsd_amd64]
+      ),
       struct(
           semver = [1,8,3],
           hosts = [darwin_amd64, linux_386, linux_amd64, windows_386, windows_amd64, freebsd_386, freebsd_amd64]
