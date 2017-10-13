@@ -49,7 +49,7 @@ func NewResolver(c *config.Config, l Labeler) *Resolver {
 	case config.ExternalMode:
 		e = newExternalResolver(l, c.KnownImports)
 	case config.VendorMode:
-		e = newVendoredResolver(l)
+		e = newVendoredResolver(l, c.PrefixRoot)
 	}
 
 	return &Resolver{
