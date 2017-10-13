@@ -60,7 +60,7 @@ func NewLabelResolver(c *config.Config) LabelResolver {
 	case config.ExternalMode:
 		e = newExternalResolver(c.KnownImports)
 	case config.VendorMode:
-		e = vendoredResolver{}
+		e = vendoredResolver{ prefixRoot: c.PrefixRoot }
 	}
 
 	return &unifiedResolver{

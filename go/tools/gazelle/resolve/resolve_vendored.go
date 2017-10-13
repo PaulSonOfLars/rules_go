@@ -18,11 +18,17 @@ package resolve
 import "github.com/bazelbuild/rules_go/go/tools/gazelle/config"
 
 // vendoredResolver resolves external packages as packages in vendor/.
-type vendoredResolver struct{}
+type vendoredResolver struct{
+	prefixRoot string
+}
 
 func (v vendoredResolver) Resolve(importpath, dir string) (Label, error) {
+	prefixRoot := ""
+	if v.prefixRoot != "" {
+		prefixRoot = v.prefixRoot + "/"
+	}
 	return Label{
-		Pkg:  "vendor/" + importpath,
+		Pkg:  prefixRoot + "vendor/" + importpath,
 		Name: config.DefaultLibName,
 	}, nil
 }
