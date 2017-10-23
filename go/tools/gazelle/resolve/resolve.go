@@ -211,8 +211,12 @@ func (r *Resolver) resolveGo(imp, pkgRel string) (Label, error) {
 		return r.l.LibraryLabel(""), nil
 	case r.c.GoPrefix == "" || strings.HasPrefix(imp, r.c.GoPrefix+"/"):
 		pkg := strings.TrimPrefix(imp, r.c.GoPrefix+"/")
+		if strings.HasPrefix(pkg, "proto") {
+			return r.l.LibraryLabel(pkg), nil
+		}
+		
 		prefixRoot := r.c.PrefixRoot
-		if prefixRoot != "" && strings.HasSuffix(prefixRoot, "/") {
+		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
 			prefixRoot += "/"
 		}
 		return r.l.LibraryLabel(prefixRoot + pkg), nil
