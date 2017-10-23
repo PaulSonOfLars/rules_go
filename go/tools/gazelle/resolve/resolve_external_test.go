@@ -101,19 +101,20 @@ func TestExternalResolver(t *testing.T) {
 			},
 		},
 	} {
-		l, err := r.Resolve(spec.importpath, "some/package")
+		l, err := r.resolve(spec.importpath)
 		if err != nil {
-			t.Errorf("r.Resolve(%q) failed with %v; want success", spec.importpath, err)
+			t.Errorf("r.ResolveGo(%q) failed with %v; want success", spec.importpath, err)
 			continue
 		}
 		if got, want := l, spec.want; !reflect.DeepEqual(got, want) {
-			t.Errorf("r.Resolve(%q) = %s; want %s", spec.importpath, got, want)
+			t.Errorf("r.ResolveGo(%q) = %s; want %s", spec.importpath, got, want)
 		}
 	}
 }
 
 func newStubExternalResolver(extraKnown []string) *externalResolver {
-	r := newExternalResolver(extraKnown)
+	l := NewLabeler(&config.Config{})
+	r := newExternalResolver(l, extraKnown)
 	r.repoRootForImportPath = stubRepoRootForImportPath
 	return r
 }

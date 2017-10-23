@@ -22,6 +22,7 @@ import (
 	"sort"
 
 	bf "github.com/bazelbuild/buildtools/build"
+	bt "github.com/bazelbuild/buildtools/tables"
 	"github.com/bazelbuild/rules_go/go/tools/gazelle/packages"
 )
 
@@ -35,11 +36,14 @@ type globvalue struct {
 	excludes []string
 }
 
-func newRule(kind string, args []interface{}, kwargs []keyvalue) *bf.Rule {
+func emptyRule(kind, name string) *bf.CallExpr {
+	return newRule(kind, []keyvalue{{"name", name}})
+}
+
+func newRule(kind string, kwargs []keyvalue) *bf.CallExpr {
+	sort.Sort(byAttrName(kwargs))
+
 	var list []bf.Expr
-	for _, arg := range args {
-		list = append(list, newValue(arg))
-	}
 	for _, arg := range kwargs {
 		expr := newValue(arg.value)
 		list = append(list, &bf.BinaryExpr{
@@ -49,11 +53,9 @@ func newRule(kind string, args []interface{}, kwargs []keyvalue) *bf.Rule {
 		})
 	}
 
-	return &bf.Rule{
-		Call: &bf.CallExpr{
-			X:    &bf.LiteralExpr{Token: kind},
-			List: list,
-		},
+	return &bf.CallExpr{
+		X:    &bf.LiteralExpr{Token: kind},
+		List: list,
 	}
 }
 
@@ -145,6 +147,25 @@ func newValue(val interface{}) bf.Expr {
 
 	log.Panicf("type not supported: %T", val)
 	return nil
+}
+
+type byAttrName []keyvalue
+
+var _ sort.Interface = byAttrName{}
+
+func (s byAttrName) Len() int {
+	return len(s)
+}
+
+func (s byAttrName) Less(i, j int) bool {
+	if cmp := bt.NamePriority[s[i].key] - bt.NamePriority[s[j].key]; cmp != 0 {
+		return cmp < 0
+	}
+	return s[i].key < s[j].key
+}
+
+func (s byAttrName) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
 }
 
 type byString []reflect.Value

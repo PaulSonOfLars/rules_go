@@ -23,66 +23,129 @@ import (
 	"github.com/bazelbuild/rules_go/go/tools/gazelle/config"
 )
 
-// A LabelResolver resolves a Go importpath into a label in Bazel.
-type LabelResolver interface {
-	// Resolve resolves a Go importpath "importpath", which is referenced from
-	// a Go package directory "dir" in the current repository.
-	// "dir" is a relative slash-delimited path from the top level of the
-	// current repository.
-	Resolve(importpath, dir string) (Label, error)
+// Resolver resolves import strings in source files (import paths in Go,
+// import statements in protos) into Bazel labels.
+// TODO(#859): imports are currently resolved by guessing a label based
+// on the name. We should be smarter about this and build a table mapping
+// import paths to labels that we can use to cross-reference.
+type Resolver struct {
+	c        *config.Config
+	l        Labeler
+	external nonlocalResolver
 }
 
-// A Label represents a label of a build target in Bazel.
-type Label struct {
-	Repo, Pkg, Name string
-	Relative        bool
+// nonlocalResolver resolves import paths outside of the current repository's
+// prefix. Once we have smarter import path resolution, this shouldn't
+// be necessary, and we can remove this abstraction.
+type nonlocalResolver interface {
+	resolve(imp string) (Label, error)
 }
 
-func (l Label) String() string {
-	if l.Relative {
-		return fmt.Sprintf(":%s", l.Name)
-	}
-
-	var repo string
-	if l.Repo != "" {
-		repo = fmt.Sprintf("@%s", l.Repo)
-	}
-
-	if path.Base(l.Pkg) == l.Name {
-		return fmt.Sprintf("%s//%s", repo, l.Pkg)
-	}
-	return fmt.Sprintf("%s//%s:%s", repo, l.Pkg, l.Name)
-}
-
-func NewLabelResolver(c *config.Config) LabelResolver {
-	var e LabelResolver
+func NewResolver(c *config.Config, l Labeler) *Resolver {
+	var e nonlocalResolver
 	switch c.DepMode {
 	case config.ExternalMode:
-		e = newExternalResolver(c.KnownImports)
+		e = newExternalResolver(l, c.KnownImports)
 	case config.VendorMode:
-		e = vendoredResolver{ prefixRoot: c.PrefixRoot }
+		e = newVendoredResolver(l, c.PrefixRoot)
 	}
 
-	return &unifiedResolver{
-		goPrefix: c.GoPrefix,
-		local:    structuredResolver{goPrefix: c.GoPrefix, prefixRoot: c.PrefixRoot},
+	return &Resolver{
+		c:        c,
+		l:        l,
 		external: e,
 	}
 }
 
-type unifiedResolver struct {
-	goPrefix        string
-	local, external LabelResolver
-}
-
-func (r *unifiedResolver) Resolve(importpath, dir string) (Label, error) {
-	if importpath != r.goPrefix && !strings.HasPrefix(importpath, r.goPrefix+"/") && !isRelative(importpath) {
-		return r.external.Resolve(importpath, dir)
+// ResolveGo resolves an import path from a Go source file to a label.
+// pkgRel is the path to the Go package relative to the repository root; it
+// is used to resolve relative imports.
+func (r *Resolver) ResolveGo(imp, pkgRel string) (Label, error) {
+	if imp == "." || imp == ".." ||
+		strings.HasPrefix(imp, "./") || strings.HasPrefix(imp, "../") {
+		cleanRel := path.Clean(path.Join(pkgRel, imp))
+		if strings.HasPrefix(cleanRel, "..") {
+			return Label{}, fmt.Errorf("relative import path %q from %q points outside of repository", imp, pkgRel)
+		}
+		imp = path.Join(r.c.GoPrefix, cleanRel)
 	}
-	return r.local.Resolve(importpath, dir)
+
+	if imp != r.c.GoPrefix && !strings.HasPrefix(imp, r.c.GoPrefix+"/") {
+		return r.external.resolve(imp)
+	}
+
+	if imp == r.c.GoPrefix {
+		return r.l.LibraryLabel(""), nil
+	} else if pkg := strings.TrimPrefix(imp, r.c.GoPrefix+"/"); !strings.HasPrefix(pkg, "proto") {
+		prefixRoot := r.c.PrefixRoot
+		if prefixRoot != "" && strings.HasSuffix(prefixRoot, "/") {
+			prefixRoot += "/"
+		}
+		return r.l.LibraryLabel(prefixRoot + pkg), nil
+	}
+	return r.l.LibraryLabel(strings.TrimPrefix(imp, r.c.GoPrefix+"/")), nil
 }
 
-// isRelative determines if an importpath is relative.
-func isRelative(importpath string) bool {
-	return strings.HasPrefix(importpath, "./") || strings.HasPrefix(importpath, "..")
+const (
+	wellKnownPrefix     = "google/protobuf/"
+	wellKnownGoProtoPkg = "ptypes"
+)
+
+// ResolveProto resolves an import statement in a .proto file to a label
+// for a proto_library rule.
+func (r *Resolver) ResolveProto(imp string) (Label, error) {
+	if !strings.HasSuffix(imp, ".proto") {
+		return Label{}, fmt.Errorf("can't import non-proto: %q", imp)
+	}
+	imp = imp[:len(imp)-len(".proto")]
+
+	if isWellKnown(imp) {
+		// Well Known Type
+		name := path.Base(imp) + "_proto"
+		return Label{Repo: config.WellKnownTypesProtoRepo, Name: name}, nil
+	}
+
+	// Temporary hack: guess the label based on the proto file name. We assume
+	// all proto files in a directory belong to the same package, and the
+	// package name matches the directory base name.
+	// TODO(#859): use dependency table to resolve once it exists.
+	rel := path.Dir(imp)
+	if rel == "." {
+		rel = ""
+	}
+	name := relBaseName(r.c, rel)
+	return r.l.ProtoLabel(rel, name), nil
+}
+
+// ResolveGoProto resolves an import statement in a .proto file to a
+// label for a go_library rule that embeds the corresponding go_proto_library.
+func (r *Resolver) ResolveGoProto(imp string) (Label, error) {
+	if !strings.HasSuffix(imp, ".proto") {
+		return Label{}, fmt.Errorf("can't import non-proto: %q", imp)
+	}
+	imp = imp[:len(imp)-len(".proto")]
+
+	if isWellKnown(imp) {
+		// Well Known Type
+		pkg := path.Join(wellKnownGoProtoPkg, path.Base(imp))
+		label := r.l.LibraryLabel(pkg)
+		if r.c.GoPrefix != config.WellKnownTypesGoPrefix {
+			label.Repo = config.WellKnownTypesGoProtoRepo
+		}
+		return label, nil
+	}
+
+	// Temporary hack: guess the label based on the proto file name. We assume
+	// all proto files in a directory belong to the same package, and the
+	// package name matches the directory base name.
+	// TODO(#859): use dependency table to resolve once it exists.
+	rel := path.Dir(imp)
+	if rel == "." {
+		rel = ""
+	}
+	return r.l.LibraryLabel(rel), nil
+}
+
+func isWellKnown(imp string) bool {
+	return strings.HasPrefix(imp, wellKnownPrefix) && strings.TrimPrefix(imp, wellKnownPrefix) == path.Base(imp)
 }

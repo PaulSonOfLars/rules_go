@@ -14,11 +14,36 @@
 
 # Once nested repositories work, this file should cease to exist.
 
-load("@io_bazel_rules_go//go/private:toolchain.bzl", "go_sdk_repository", "go_repository_select")
+load("@io_bazel_rules_go//go/private:toolchain.bzl", "go_sdk", "go_host_sdk")
 load("@io_bazel_rules_go//go/private:repository_tools.bzl", "go_repository_tools")
 load("@io_bazel_rules_go//go/private:go_repository.bzl", "go_repository")
+load('@io_bazel_rules_go//go/toolchain:toolchains.bzl', "go_register_toolchains")
 
 _sdk_repositories = {
+    # 1.9.1 repositories
+    "go1.9.1.darwin-amd64.tar.gz": "59bc6deee2969dddc4490b684b15f63058177f5c7e27134c060288b7d76faab0",
+    "go1.9.1.linux-386.tar.gz": "2cea1ce9325cb40839601b566bc02b11c92b2942c21110b1b254c7e72e5581e7",
+    "go1.9.1.linux-amd64.tar.gz": "07d81c6b6b4c2dcf1b5ef7c27aaebd3691cdb40548500941f92b221147c5d9c7",
+    "go1.9.1.linux-armv6l.tar.gz": "65a0495a50c7c240a6487b1170939586332f6c8f3526abdbb9140935b3cff14c",
+    "go1.9.1.windows-386.zip": "ea9c79c9e6214c9a78a107ef5a7bff775a281bffe8c2d50afa66d2d33998078a",
+    "go1.9.1.windows-amd64.zip": "8dc72a3881388e4e560c2e45f6be59860b623ad418e7da94e80fee012221cc81",
+    "go1.9.1.freebsd-386.tar.gz": "0da7ad96606a8ceea85652eb20816077769d51de9219d85b9b224a3390070c50",
+    "go1.9.1.freebsd-amd64.tar.gz": "c4eeacbb94821c5f252897a4d49c78293eaa97b29652d789dce9e79bc6aa6163",
+    "go1.9.1.linux-arm64.tar.gz": "d31ecae36efea5197af271ccce86ccc2baf10d2e04f20d0fb75556ecf0614dad",
+    "go1.9.1.linux-ppc64le.tar.gz": "de57b6439ce9d4dd8b528599317a35fa1e09d6aa93b0a80e3945018658d963b8",
+    "go1.9.1.linux-s390x.tar.gz": "9adf03574549db82a72e0d721ef2178ec5e51d1ce4f309b271a2bca4dcf206f6",
+    # 1.9 repositories
+    "go1.9.darwin-amd64.tar.gz": "c2df361ec6c26fcf20d5569496182cb20728caa4d351bc430b2f0f1212cca3e0",
+    "go1.9.linux-386.tar.gz": "7cccff99dacf59162cd67f5b11070d667691397fd421b0a9ad287da019debc4f",
+    "go1.9.linux-amd64.tar.gz": "d70eadefce8e160638a9a6db97f7192d8463069ab33138893ad3bf31b0650a79",
+    "go1.9.linux-armv6l.tar.gz": "f52ca5933f7a8de2daf7a3172b0406353622c6a39e67dd08bbbeb84c6496f487",
+    "go1.9.windows-386.zip": "ecfe6f5be56acedc56cd9ff735f239a12a7c94f40b0ea9753bbfd17396f5e4b9",
+    "go1.9.windows-amd64.zip": "874b144b994643cff1d3f5875369d65c01c216bb23b8edddf608facc43966c8b",
+    "go1.9.freebsd-386.tar.gz": "9e415e340eaea526170b0fd59aa55939ff4f76c126193002971e8c6799e2ed3a",
+    "go1.9.freebsd-amd64.tar.gz": "ba54efb2223fb4145604dcaf8605d519467f418ab02c081d3cd0632b6b43b6e7",
+    "go1.9.linux-ppc64le.tar.gz": "10b66dae326b32a56d4c295747df564616ec46ed0079553e88e39d4f1b2ae985",
+    "go1.9.linux-arm64.tar.gz": "0958dcf454f7f26d7acc1a4ddc34220d499df845bc2051c14ff8efdf1e3c29a6",
+    "go1.9.linux-s390x.tar.gz": "e06231e4918528e2eba1d3cff9bc4310b777971e5d8985f9772c6018694a3af8",
     # 1.8.4 repositories
     "go1.8.4.darwin-amd64.tar.gz": "cf803053aec24425d7be986af6dff0051bb48527bcdfa5b9ffeb4d40701ab54e",
     "go1.8.4.linux-386.tar.gz": "00354388d5f7d21b69c62361e73250d2633124e8599386f704f6dd676a2f82ac",
@@ -66,34 +91,38 @@ _sdk_repositories = {
     'go1.7.5.darwin-amd64.tar.gz': '2e2a5e0a5c316cf922cf7d59ee5724d49fc35b07a154f6c4196172adfc14b2ca',
 }
 
-def go_repositories(
-    go_version = None,
-    go_linux = None,
-    go_darwin = None):
+def go_rules_dependencies():
+  """See /go/workspace.rst#go-rules-dependencies for full documentation."""
 
+  # Add all the basic sdk repositories
   for filename, sha256 in _sdk_repositories.items():
     name = filename
     for suffix in [".tar.gz", ".zip"]:
       if name.endswith(suffix):
         name = name[:-len(suffix)]
     name = name.replace("-", "_").replace(".", "_")
-    go_sdk_repository(
+    _maybe(go_sdk,
         name = name,
-        url = "https://storage.googleapis.com/golang/" + filename,
+        urls = ["https://storage.googleapis.com/golang/" + filename],
         sha256 = sha256,
         strip_prefix = "go",
     )
 
+  _maybe(go_host_sdk,
+      name = "go_host_sdk",
+  )
+
   # Needed for gazelle and wtool
-  native.http_archive(
+  _maybe(native.http_archive,
       name = "com_github_bazelbuild_buildtools",
-      url = "https://codeload.github.com/bazelbuild/buildtools/zip/d5dcc29f2304aa28c29ecb8337d52bb9de908e0c",
-      strip_prefix = "buildtools-d5dcc29f2304aa28c29ecb8337d52bb9de908e0c",
+      # master, as of 14 Aug 2017
+      url = "https://codeload.github.com/bazelbuild/buildtools/zip/799e530642bac55de7e76728fa0c3161484899f6",
+      strip_prefix = "buildtools-799e530642bac55de7e76728fa0c3161484899f6",
       type = "zip",
   )
 
   # Needed for fetch repo
-  go_repository(
+  _maybe(go_repository,
       name = "org_golang_x_tools",
       importpath = "golang.org/x/tools",
       urls = ["https://codeload.github.com/golang/tools/zip/3d92dd60033c312e3ae7cac319c792271cf67e37"],
@@ -101,5 +130,56 @@ def go_repositories(
       type = "zip",
   )
 
-  go_repository_select(name = "io_bazel_rules_go_toolchain", go_version = go_version)
-  go_repository_tools(name = "io_bazel_rules_go_repository_tools")
+  _maybe(go_repository_tools,
+      name = "io_bazel_rules_go_repository_tools",
+  )
+
+
+  # Proto dependancies
+  _maybe(go_repository,
+      name = "com_github_golang_protobuf",
+      importpath = "github.com/golang/protobuf",
+      commit = "8ee79997227bf9b34611aee7946ae64735e6fd93",
+  )
+  _maybe(native.http_archive,
+      name = "com_google_protobuf",
+      url = "https://codeload.github.com/google/protobuf/zip/054054c1523342294d50460d652ad2c767df627f",
+      strip_prefix = "protobuf-054054c1523342294d50460d652ad2c767df627f",
+      type = "zip",
+  )
+
+  # Only used by deprecated go_proto_library implementation
+  _maybe(native.http_archive,
+      name = "com_github_google_protobuf",
+      url = "https://github.com/google/protobuf/archive/v3.4.0.tar.gz",
+      strip_prefix = "protobuf-3.4.0",
+  )
+
+  # GRPC dependancies
+  _maybe(go_repository,
+      name = "org_golang_x_net",
+      commit = "4971afdc2f162e82d185353533d3cf16188a9f4e",
+      importpath = "golang.org/x/net",
+  )
+  _maybe(go_repository,
+      name = "org_golang_google_grpc",
+      tag = "v1.0.4",
+      importpath = "google.golang.org/grpc",
+  )
+
+  # Needed for examples
+  _maybe(go_repository,
+      name = "com_github_golang_glog",
+      commit = "23def4e6c14b4da8ac2ed8007337bc5eb5007998",
+      importpath = "github.com/golang/glog",
+  )
+  _maybe(go_repository,
+      name = "com_github_jteeuwen_go_bindata",
+      importpath = "github.com/jteeuwen/go-bindata",
+      commit = "a0ff2567cfb70903282db057e799fd826784d41d",
+  )
+
+
+def _maybe(repo_rule, name, **kwargs):
+  if name not in native.existing_rules():
+    repo_rule(name=name, **kwargs)

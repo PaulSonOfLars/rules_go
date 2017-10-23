@@ -1,35 +1,44 @@
-load('//go/private:go_toolchain.bzl', 'go_toolchain_type')
-
 _bazelrc = """
-build --fetch=False --verbose_failures --sandbox_debug --test_output=errors --spawn_strategy=standalone --genrule_strategy=standalone
+startup --batch
+
+build --verbose_failures
+build --sandbox_debug
+build --test_output=errors
+build --spawn_strategy=standalone
+build --genrule_strategy=standalone
+
 test --test_strategy=standalone
+
+build:isolate --fetch=False
 """
 
+CURRENT_VERSION = "current"
+
 def _bazel_test_script_impl(ctx):
+  go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
   script_content = ''
   workspace_content = ''
-  go_version = ''
-  if ctx.attr.go_version:
-    go_version = 'go_version = "%s"' % ctx.attr.go_version
   subdir = ""
   if ctx.attr.subdir:
     subdir = ctx.attr.subdir + "/"
   # Build the bazel startup args
   bazelrc = ctx.new_file(subdir + ".bazelrc")
   args = ["--bazelrc={0}".format(bazelrc.basename), "--nomaster_blazerc"]
-  if ctx.attr.batch:
-    args += ["--batch"]
   # Add the command and any command specific args
   args += [ctx.attr.command]
+  if ctx.attr.config:
+    args += ["--config", ctx.attr.config]
   for ext in ctx.attr.externals:
     root = ext.label.workspace_root
     _,_,ws = root.rpartition("/")
     workspace_content += 'local_repository(name = "{0}", path = "{1}/{2}")\n'.format(ws, ctx.attr._execroot.path, root)
-  go_toolchain = ctx.attr._go_toolchain[go_toolchain_type]
-  workspace_content += 'local_repository(name = "{0}", path = "{1}")\n'.format(go_toolchain.sdk, go_toolchain.root.path)
+  workspace_content += 'local_repository(name = "{0}", path = "{1}")\n'.format(go_toolchain.sdk, go_toolchain.paths.root.path)
   # finalise the workspace file
-  workspace_content += 'load("@io_bazel_rules_go//go:def.bzl", "go_repositories")\n'
-  workspace_content += 'go_repositories({0})\n'.format(go_version)
+  workspace_content += 'load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")\n'
+  if ctx.attr.go_version == CURRENT_VERSION:
+    workspace_content += 'go_register_toolchains()\n'
+  elif ctx.attr.go_version:
+    workspace_content += 'go_register_toolchains(go_version="{}")\n'.format(ctx.attr.go_version)
   if ctx.attr.workspace:
     workspace_content += ctx.attr.workspace
   workspace_file = ctx.new_file(subdir + "WORKSPACE")
@@ -64,31 +73,36 @@ def _bazel_test_script_impl(ctx):
 _bazel_test_script = rule(
     _bazel_test_script_impl,
     attrs = {
-        "batch": attr.bool(default=True),
-        "command": attr.string(mandatory=True, values=["build", "test", "coverage"]),
+        "command": attr.string(mandatory=True, values=["build", "test", "coverage", "run"]),
         "args": attr.string_list(default=[]),
         "subdir": attr.string(),
         "target": attr.string(mandatory=True),
         "externals": attr.label_list(allow_files=True),
-        "go_version": attr.string(),
+        "go_version": attr.string(default=CURRENT_VERSION),
         "workspace": attr.string(),
         "prepare": attr.string(),
         "check": attr.string(),
-        "_go_toolchain": attr.label(default = Label("@io_bazel_rules_go_toolchain//:go_toolchain")),
+        "config": attr.string(default="isolate"),
         "_execroot": attr.label(default = Label("@test_environment//:execroot")),
-    }
+    },
+    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
-def bazel_test(name, batch = None, command = None, args=None, subdir = None, target = None, go_version = None, tags=[], workspace="", prepare="", check=""):
+def bazel_test(name, command = None, args=None, subdir = None, target = None, go_version = None, tags=[], externals=[], workspace="", prepare="", check="", config=None):
   script_name = name+"_script"
-  externals = [
-      "@io_bazel_rules_go//:README.md",
+  externals = externals + [
+      "@io_bazel_rules_go//:AUTHORS",
       "@local_config_cc//:cc_wrapper",
-      "@io_bazel_rules_go_toolchain//:BUILD.bazel",
   ]
+  if go_version:
+    sdk_name = go_version.replace("-", "_").replace(".", "_")
+    externals.extend([
+      "@go{}_linux_amd64//:go".format(sdk_name),
+      "@go{}_darwin_amd64//:go".format(sdk_name),
+    ])
+
   _bazel_test_script(
       name = script_name,
-      batch = batch,
       command = command,
       args = args,
       subdir = subdir,
@@ -98,6 +112,7 @@ def bazel_test(name, batch = None, command = None, args=None, subdir = None, tar
       workspace = workspace,
       prepare = prepare,
       check = check,
+      config = config,
   )
   native.sh_test(
       name = name,
@@ -123,7 +138,7 @@ def _md5_sum_impl(ctx):
 
 md5_sum = rule(
     _md5_sum_impl,
-    attrs = { 
+    attrs = {
       "srcs": attr.label_list(allow_files=True),
       "_md5sum":  attr.label(allow_files=True, single_file=True, default=Label("@io_bazel_rules_go//go/tools/builders:md5sum")),
     },
@@ -174,9 +189,9 @@ def _execroot_impl(ctx):
   )
 
 execroot = rule(
-    _execroot_impl, 
+    _execroot_impl,
     attrs = {
         "path": attr.string(mandatory = True),
         "bazel": attr.string(mandatory = True),
-    }
+    },
 )

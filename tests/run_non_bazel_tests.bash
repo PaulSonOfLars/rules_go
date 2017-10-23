@@ -18,15 +18,6 @@ tests=(
   test_chdir/test_chdir.bash
 )
 
-# Manual tests are not executed as part of CI.
-manual_tests=(
-  build_gazelle_with_1.7/build_gazelle_with_1.7.bash
-  custom_go_toolchain/custom_go_toolchain.bash
-)
-if [ "$1" != "ci" ]; then
-  tests+=("${manual_tests[@]}")
-fi
-
 passing_tests=()
 failing_tests=()
 

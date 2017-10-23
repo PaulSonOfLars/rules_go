@@ -25,6 +25,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	bf "github.com/bazelbuild/buildtools/build"
@@ -57,85 +58,177 @@ var commandFromName = map[string]command{
 }
 
 func run(c *config.Config, cmd command, emit emitFunc) {
-	r := resolve.NewLabelResolver(c)
-	shouldProcessRoot := false
-	didProcessRoot := false
-	shouldFix := cmd == fixCmd
+	v := newVisitor(c, cmd, emit)
 	for _, dir := range c.Dirs {
-		if c.RepoRoot == dir {
-			shouldProcessRoot = true
-		}
-		packages.Walk(c, dir, func(pkg *packages.Package, oldFile *bf.File) {
-			if pkg.Rel == "" {
-				didProcessRoot = true
-			}
-			processPackage(c, r, shouldFix, emit, pkg, oldFile)
-		})
+		packages.Walk(c, dir, v.visit)
 	}
-	if shouldProcessRoot && !didProcessRoot {
-		// We did not process a package at the repository root. We need to put
-		// a go_prefix rule there, even if there are no .go files in that directory.
-		pkg := &packages.Package{Dir: c.RepoRoot}
-		var oldFile *bf.File
-		var oldData []byte
-		oldPath, err := findBuildFile(c, c.RepoRoot)
-		if os.IsNotExist(err) {
-			goto processRoot
-		}
-		if err != nil {
-			log.Print(err)
-			return
-		}
-		oldData, err = ioutil.ReadFile(oldPath)
-		if err != nil {
-			log.Print(err)
-			return
-		}
-		oldFile, err = bf.Parse(oldPath, oldData)
-		if err != nil {
-			log.Print(err)
-			return
-		}
+	v.finish()
+}
 
-	processRoot:
-		processPackage(c, r, shouldFix, emit, pkg, oldFile)
+type visitor interface {
+	// visit is called once for each directory with buildable Go code that
+	// Gazelle processes. "pkg" describes the buildable Go code. It will not
+	// be nil. "oldFile" is the existing build file in the visited directory.
+	// It may be nil if no file is present.
+	visit(c *config.Config, pkg *packages.Package, oldFile *bf.File)
+
+	// finish is called once after all directories have been visited.
+	finish()
+}
+
+type visitorBase struct {
+	c    *config.Config
+	r    *resolve.Resolver
+	l    resolve.Labeler
+	emit emitFunc
+}
+
+func newVisitor(c *config.Config, cmd command, emit emitFunc) visitor {
+	l := resolve.NewLabeler(c)
+	r := resolve.NewResolver(c, l)
+	base := visitorBase{
+		c:    c,
+		r:    r,
+		l:    l,
+		emit: emit,
+	}
+	if c.StructureMode == config.HierarchicalMode {
+		v := &hierarchicalVisitor{visitorBase: base}
+		for _, dir := range c.Dirs {
+			if c.RepoRoot == dir {
+				v.shouldProcessRoot = true
+				break
+			}
+		}
+		return v
+	}
+
+	return &flatVisitor{
+		visitorBase: base,
+		rules:       make(map[string][]bf.Expr),
 	}
 }
 
-func processPackage(c *config.Config, r resolve.LabelResolver, shouldFix bool, emit emitFunc, pkg *packages.Package, oldFile *bf.File) {
-	g := rules.NewGenerator(c, r, oldFile)
-	genFile := g.Generate(pkg)
+// hierarchicalVisitor generates and updates one build file per directory.
+type hierarchicalVisitor struct {
+	visitorBase
+	shouldProcessRoot, didProcessRoot bool
+}
 
+func (v *hierarchicalVisitor) visit(c *config.Config, pkg *packages.Package, oldFile *bf.File) {
+	g := rules.NewGenerator(c, v.r, v.l, pkg.Rel, oldFile)
+	rules, empty := g.GenerateRules(pkg)
+	genFile := &bf.File{
+		Path: filepath.Join(pkg.Dir, c.DefaultBuildFileName()),
+		Stmt: rules,
+	}
+	v.mergeAndEmit(c, genFile, oldFile, empty)
+}
+
+func (v *hierarchicalVisitor) finish() {
+	if !v.shouldProcessRoot || v.didProcessRoot {
+		return
+	}
+
+	// We did not process a package at the repository root. We need to create
+	// a build file if none exists.
+	for _, base := range v.c.ValidBuildFileNames {
+		p := filepath.Join(v.c.RepoRoot, base)
+		if _, err := os.Stat(p); err == nil || !os.IsNotExist(err) {
+			return
+		}
+	}
+	p := filepath.Join(v.c.RepoRoot, v.c.DefaultBuildFileName())
+	if f, err := os.Create(p); err != nil {
+		log.Print(err)
+	} else {
+		f.Close()
+	}
+}
+
+// flatVisitor generates and updates a single build file that contains rules
+// for everything in the repository.
+type flatVisitor struct {
+	visitorBase
+	rules       map[string][]bf.Expr
+	empty       []bf.Expr
+	oldRootFile *bf.File
+}
+
+func (v *flatVisitor) visit(c *config.Config, pkg *packages.Package, oldFile *bf.File) {
+	if pkg.Rel == "" {
+		v.oldRootFile = oldFile
+	}
+	g := rules.NewGenerator(c, v.r, v.l, "", oldFile)
+	rules, empty := g.GenerateRules(pkg)
+	v.rules[pkg.Rel] = rules
+	v.empty = append(v.empty, empty...)
+}
+
+func (v *flatVisitor) finish() {
+	if v.oldRootFile == nil {
+		var err error
+		v.oldRootFile, err = loadBuildFile(v.c, v.c.RepoRoot)
+		if err != nil && !os.IsNotExist(err) {
+			log.Print(err)
+		}
+	}
+
+	genFile := &bf.File{
+		Path: filepath.Join(v.c.RepoRoot, v.c.DefaultBuildFileName()),
+	}
+
+	packageNames := make([]string, 0, len(v.rules))
+	for name, _ := range v.rules {
+		packageNames = append(packageNames, name)
+	}
+	sort.Strings(packageNames)
+
+	for _, name := range packageNames {
+		rs := v.rules[name]
+		genFile.Stmt = append(genFile.Stmt, rs...)
+	}
+
+	v.mergeAndEmit(v.c, genFile, v.oldRootFile, v.empty)
+}
+
+// mergeAndEmit merges "genFile" with "oldFile". "oldFile" may be nil if
+// no file exists. If v.c.ShouldFix is true, deprecated usage of old rules in
+// "oldFile" will be fixed. The resulting merged file will be emitted using
+// the "v.emit" function.
+func (v *visitorBase) mergeAndEmit(c *config.Config, genFile, oldFile *bf.File, empty []bf.Expr) {
 	if oldFile == nil {
 		// No existing file, so no merge required.
 		rules.SortLabels(genFile)
+		genFile = merger.FixLoads(genFile)
 		bf.Rewrite(genFile, nil) // have buildifier 'format' our rules.
-		if err := emit(c, genFile); err != nil {
+		if err := v.emit(v.c, genFile); err != nil {
 			log.Print(err)
 		}
 		return
 	}
 
 	// Existing file. Fix it or see if it needs fixing before merging.
-	if shouldFix {
-		oldFile = merger.FixFile(oldFile)
+	if c.ShouldFix {
+		oldFile = merger.FixFile(c, oldFile)
 	} else {
-		fixedFile := merger.FixFile(oldFile)
+		fixedFile := merger.FixFile(c, oldFile)
 		if fixedFile != oldFile {
 			log.Printf("%s: warning: file contains rules whose structure is out of date. Consider running 'gazelle fix'.", oldFile.Path)
 		}
 	}
 
 	// Existing file, so merge and replace the old one.
-	mergedFile := merger.MergeWithExisting(genFile, oldFile)
+	mergedFile := merger.MergeWithExisting(genFile, oldFile, empty)
 	if mergedFile == nil {
 		// Ignored file. Don't emit.
 		return
 	}
 
 	rules.SortLabels(mergedFile)
+	mergedFile = merger.FixLoads(mergedFile)
 	bf.Rewrite(mergedFile, nil) // have buildifier 'format' our rules.
-	if err := emit(c, mergedFile); err != nil {
+	if err := v.emit(v.c, mergedFile); err != nil {
 		log.Print(err)
 		return
 	}
@@ -214,6 +307,8 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 	repoRoot := fs.String("repo_root", "", "path to a directory which corresponds to go_prefix, otherwise gazelle searches for it.")
 	fs.Var(&knownImports, "known_import", "import path for which external resolution is skipped (can specify multiple times)")
 	mode := fs.String("mode", "fix", "print: prints all of the updated BUILD files\n\tfix: rewrites all of the BUILD files in place\n\tdiff: computes the rewrite but then just does a diff")
+	flat := fs.Bool("experimental_flat", false, "whether gazelle should generate a single, combined BUILD file.\nThis mode is experimental and may not work yet.")
+	proto := fs.String("proto", "default", "default: generates new proto rules\n\tdisable: does not touch proto rules\n\tlegacy (deprecated): generates old proto rules")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			usage(fs)
@@ -266,13 +361,7 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 		return nil, cmd, nil, fmt.Errorf("no valid build file names specified")
 	}
 
-	c.GenericTags = make(config.BuildTags)
-	for _, t := range strings.Split(*buildTags, ",") {
-		if strings.HasPrefix(t, "!") {
-			return nil, cmd, nil, fmt.Errorf("build tags can't be negated: %s", t)
-		}
-		c.GenericTags[t] = true
-	}
+	c.SetBuildTags(*buildTags)
 	c.Platforms = config.DefaultPlatformTags
 	c.PreprocessTags()
 
@@ -286,7 +375,20 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 
 	c.PrefixRoot = *prefixRoot
 
+	c.ShouldFix = cmd == fixCmd
+
 	c.DepMode, err = config.DependencyModeFromString(*external)
+	if err != nil {
+		return nil, cmd, nil, err
+	}
+
+	if *flat {
+		c.StructureMode = config.FlatMode
+	} else {
+		c.StructureMode = config.HierarchicalMode
+	}
+
+	c.ProtoMode, err = config.ProtoModeFromString(*proto)
 	if err != nil {
 		return nil, cmd, nil, err
 	}
@@ -301,33 +403,35 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 	return &c, cmd, emit, err
 }
 
-func findBuildFile(c *config.Config, dir string) (string, error) {
+func loadBuildFile(c *config.Config, dir string) (*bf.File, error) {
+	var buildPath string
 	for _, base := range c.ValidBuildFileNames {
 		p := filepath.Join(dir, base)
 		fi, err := os.Stat(p)
 		if err == nil {
 			if fi.Mode().IsRegular() {
-				return p, nil
+				buildPath = p
+				break
 			}
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return "", err
+			return nil, err
 		}
 	}
-	return "", os.ErrNotExist
+	if buildPath == "" {
+		return nil, os.ErrNotExist
+	}
+
+	data, err := ioutil.ReadFile(buildPath)
+	if err != nil {
+		return nil, err
+	}
+	return bf.Parse(buildPath, data)
 }
 
 func loadGoPrefix(c *config.Config) (string, error) {
-	p, err := findBuildFile(c, c.RepoRoot)
-	if err != nil {
-		return "", err
-	}
-	b, err := ioutil.ReadFile(p)
-	if err != nil {
-		return "", err
-	}
-	f, err := bf.Parse(p, b)
+	f, err := loadBuildFile(c, c.RepoRoot)
 	if err != nil {
 		return "", err
 	}
@@ -356,8 +460,12 @@ func loadGoPrefix(c *config.Config) (string, error) {
 }
 
 func isDescendingDir(dir, root string) bool {
-	if dir == root {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
 		return true
 	}
-	return strings.HasPrefix(dir, fmt.Sprintf("%s%c", root, filepath.Separator))
+	return !strings.HasPrefix(rel, "..")
 }

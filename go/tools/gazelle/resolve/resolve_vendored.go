@@ -15,20 +15,25 @@ limitations under the License.
 
 package resolve
 
-import "github.com/bazelbuild/rules_go/go/tools/gazelle/config"
-
 // vendoredResolver resolves external packages as packages in vendor/.
-type vendoredResolver struct{
+type vendoredResolver struct {
+	l          Labeler
 	prefixRoot string
 }
 
-func (v vendoredResolver) Resolve(importpath, dir string) (Label, error) {
+var _ nonlocalResolver = (*vendoredResolver)(nil)
+
+func newVendoredResolver(l Labeler, prefixRoot string) *vendoredResolver {
+	return &vendoredResolver{
+		l:          l,
+		prefixRoot: prefixRoot,
+	}
+}
+
+func (v *vendoredResolver) resolve(importpath string) (Label, error) {
 	prefixRoot := ""
 	if v.prefixRoot != "" {
 		prefixRoot = v.prefixRoot + "/"
 	}
-	return Label{
-		Pkg:  prefixRoot + "vendor/" + importpath,
-		Name: config.DefaultLibName,
-	}, nil
+	return v.l.LibraryLabel(prefixRoot + "vendor/" + importpath), nil
 }

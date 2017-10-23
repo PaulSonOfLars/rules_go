@@ -13,29 +13,40 @@
 # limitations under the License.
 
 load("@io_bazel_rules_go//go/private:go_repository.bzl", "go_repository", "env_execute")
+load("@io_bazel_rules_go//go/toolchain:toolchains.bzl", "DEFAULT_VERSION")
+load("@io_bazel_rules_go//go/private:toolchain.bzl", "executable_extension")
 
 _GO_REPOSITORY_TOOLS_BUILD_FILE = """
 package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "fetch_repo",
-    srcs = ["bin/fetch_repo"],
+    srcs = ["bin/fetch_repo{extension}"],
 )
 
 filegroup(
     name = "gazelle",
-    srcs = ["bin/gazelle"],
+    srcs = ["bin/gazelle{extension}"],
 )
 """
 
 def _go_repository_tools_impl(ctx):
   # We work this out here because you can't use a toolchain from a repository rule
+  # TODO: This is an ugly non sustainable hack, we need to kill repository tools.
+
+  version = DEFAULT_VERSION.replace(".", "_")
+  go_sdk = None
+  extension = ""
   if ctx.os.name == 'linux':
-    go_tool = ctx.path(Label("@go1_8_3_linux_amd64//:bin/go"))
+    go_sdk = ctx.attr.linux_sdk if ctx.attr.linux_sdk else "go{}_linux_amd64".format(version)
   elif ctx.os.name == 'mac os x':
-    go_tool = ctx.path(Label("@go1_8_3_darwin_amd64//:bin/go"))
+    go_sdk = ctx.attr.linux_sdk if ctx.attr.linux_sdk else "go{}_darwin_amd64".format(version)
+  elif ctx.os.name.startswith('windows'):
+    go_sdk = ctx.attr.linux_sdk if ctx.attr.linux_sdk else "go{}_windows_amd64".format(version)
+    extension = ".exe"
   else:
-    fail("Unsupported operating system: " + ctx.os.name)
+      fail("Unsupported operating system: " + ctx.os.name)
+  go_tool = ctx.path(Label("@{}//:bin/go{}".format(go_sdk, extension)))
 
   x_tools_commit = "3d92dd60033c312e3ae7cac319c792271cf67e37"
   x_tools_path = ctx.path('tools-' + x_tools_commit)
@@ -50,6 +61,12 @@ def _go_repository_tools_impl(ctx):
       type = "zip",
   )
 
+  if "TMP" in ctx.os.environ:
+    tmp = ctx.os.environ["TMP"]
+  else:
+    ctx.file("tmp/ignore", content="") # make a file to force the directory to exist
+    tmp = str(ctx.path("tmp").realpath)
+
   # Build something that looks like a normal GOPATH so go install will work
   ctx.symlink(x_tools_path, "src/golang.org/x/tools")
   ctx.symlink(buildtools_path, "src/github.com/bazelbuild/buildtools")
@@ -57,6 +74,7 @@ def _go_repository_tools_impl(ctx):
   env = {
     'GOROOT': str(go_tool.dirname.dirname),
     'GOPATH': str(ctx.path('')),
+    'TMP': tmp,
   }
 
   # build gazelle and fetch_repo
@@ -68,13 +86,15 @@ def _go_repository_tools_impl(ctx):
       fail("failed to build fetch_repo: %s" % result.stderr)
       
   # add a build file to export the tools
-  ctx.file('BUILD', _GO_REPOSITORY_TOOLS_BUILD_FILE, False)
+  ctx.file('BUILD.bazel', _GO_REPOSITORY_TOOLS_BUILD_FILE.format(extension=executable_extension(ctx)), False)
 
 go_repository_tools = repository_rule(
     _go_repository_tools_impl,
     attrs = {
+        "linux_sdk": attr.string(),
+        "darwin_sdk": attr.string(),
         "_tools": attr.label(
-            default = Label("//go/tools:BUILD"),
+            default = Label("//go/tools:BUILD.bazel"),
             allow_files = True,
             single_file = True,
         ),
@@ -84,4 +104,5 @@ go_repository_tools = repository_rule(
             single_file = True,
         ),
     },
+    environ = ["TMP"],
 )

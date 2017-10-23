@@ -17,6 +17,7 @@ package packages
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -39,18 +40,27 @@ type Package struct {
 	// Components in Rel are separated with slashes.
 	Rel string
 
-	Library, Binary, Test, XTest Target
+	Library, Binary, Test, XTest GoTarget
+	Proto                        ProtoTarget
 
-	Protos      []string
-	HasPbGo     bool
 	HasTestdata bool
 }
 
-// Target contains metadata about a buildable Go target in a package.
-type Target struct {
+// GoTarget contains metadata about a buildable Go target in a package.
+type GoTarget struct {
 	Sources, Imports PlatformStrings
 	COpts, CLinkOpts PlatformStrings
 	Cgo              bool
+}
+
+// ProtoTarget contains metadata about proto files in a package.
+type ProtoTarget struct {
+	Sources, Imports PlatformStrings
+	HasServices      bool
+
+	// HasPbGo indicates whether unexcluded .pb.go files are present in the
+	// same package. They will not be in this target's sources.
+	HasPbGo bool
 }
 
 // PlatformStrings contains a set of strings associated with a buildable
@@ -70,11 +80,32 @@ func (p *Package) IsCommand() bool {
 	return p.Name == "main"
 }
 
-// HasGo returns true if at least one target in the package contains a
-// .go source file. If a package does not contain Go code, Gazelle will
-// not generate rules for it.
-func (p *Package) HasGo() bool {
-	return p.Library.HasGo() || p.Binary.HasGo() || p.Test.HasGo() || p.XTest.HasGo()
+// isBuildable returns true if anything in the package is buildable.
+// This is true if the package has Go code that satisfies build constraints
+// on any platform or has proto files not in legacy mode.
+func (p *Package) isBuildable(c *config.Config) bool {
+	return p.Library.HasGo() || p.Binary.HasGo() || p.Test.HasGo() || p.XTest.HasGo() ||
+		p.Proto.HasProto() && c.ProtoMode == config.DefaultProtoMode
+}
+
+// ImportPath returns the inferred Go import path for this package. This
+// is determined as follows:
+//
+// * If "vendor" is a component in p.Rel, everything after the last "vendor"
+//   component is returned.
+// * Otherwise, prefix joined with Rel is returned.
+//
+// TODO(jayconrod): extract canonical import paths from comments on
+// package statements.
+func (p *Package) ImportPath(prefix string) string {
+	components := strings.Split(p.Rel, "/")
+	for i := len(components) - 1; i >= 0; i-- {
+		if components[i] == "vendor" {
+			return path.Join(components[i+1:]...)
+		}
+	}
+
+	return path.Join(prefix, p.Rel)
 }
 
 // firstGoFile returns the name of a .go file if the package contains at least
@@ -92,12 +123,16 @@ func (p *Package) firstGoFile() string {
 	return p.XTest.firstGoFile()
 }
 
-func (t *Target) HasGo() bool {
+func (t *GoTarget) HasGo() bool {
 	return t.Sources.HasGo()
 }
 
-func (t *Target) firstGoFile() string {
+func (t *GoTarget) firstGoFile() string {
 	return t.Sources.firstGoFile()
+}
+
+func (t *ProtoTarget) HasProto() bool {
+	return !t.Sources.IsEmpty()
 }
 
 func (ts *PlatformStrings) HasGo() bool {
@@ -143,7 +178,9 @@ func (ts *PlatformStrings) firstGoFile() string {
 // be added to any target (for example, .txt files).
 func (p *Package) addFile(c *config.Config, info fileInfo, cgo bool) error {
 	switch {
-	case info.category == ignoredExt || info.category == unsupportedExt:
+	case info.category == ignoredExt || info.category == unsupportedExt ||
+		!cgo && (info.category == cExt || info.category == csExt) ||
+		c.ProtoMode == config.DisableProtoMode && info.category == protoExt:
 		return nil
 	case info.isXTest:
 		if info.isCgo {
@@ -156,18 +193,18 @@ func (p *Package) addFile(c *config.Config, info fileInfo, cgo bool) error {
 		}
 		p.Test.addFile(c, info)
 	case info.category == protoExt:
-		p.Protos = append(p.Protos, info.name)
+		p.Proto.addFile(c, info)
 	default:
 		p.Library.addFile(c, info)
 	}
 	if strings.HasSuffix(info.name, ".pb.go") {
-		p.HasPbGo = true
+		p.Proto.HasPbGo = true
 	}
 
 	return nil
 }
 
-func (t *Target) addFile(c *config.Config, info fileInfo) {
+func (t *GoTarget) addFile(c *config.Config, info fileInfo) {
 	if info.isCgo {
 		t.Cgo = true
 	}
@@ -189,6 +226,12 @@ func (t *Target) addFile(c *config.Config, info fileInfo) {
 	}
 }
 
+func (t *ProtoTarget) addFile(c *config.Config, info fileInfo) {
+	t.Sources.addGenericStrings(info.name)
+	t.Imports.addGenericStrings(info.imports...)
+	t.HasServices = t.HasServices || info.hasServices
+}
+
 func (ps *PlatformStrings) addGenericStrings(ss ...string) {
 	ps.Generic = append(ps.Generic, ss...)
 }
@@ -196,7 +239,8 @@ func (ps *PlatformStrings) addGenericStrings(ss ...string) {
 func (ps *PlatformStrings) addGenericOpts(platforms config.PlatformTags, opts []taggedOpts) {
 	for _, t := range opts {
 		if t.tags == "" {
-			ps.Generic = append(ps.Generic, t.opts)
+			ps.Generic = append(ps.Generic, t.opts...)
+			ps.Generic = append(ps.Generic, optSeparator)
 			continue
 		}
 
@@ -205,7 +249,8 @@ func (ps *PlatformStrings) addGenericOpts(platforms config.PlatformTags, opts []
 				if ps.Platform == nil {
 					ps.Platform = make(map[string][]string)
 				}
-				ps.Platform[name] = append(ps.Platform[name], t.opts)
+				ps.Platform[name] = append(ps.Platform[name], t.opts...)
+				ps.Platform[name] = append(ps.Platform[name], optSeparator)
 			}
 		}
 	}
@@ -224,7 +269,8 @@ func (ps *PlatformStrings) addTaggedOpts(name string, opts []taggedOpts, tags ma
 			if ps.Platform == nil {
 				ps.Platform = make(map[string][]string)
 			}
-			ps.Platform[name] = append(ps.Platform[name], t.opts)
+			ps.Platform[name] = append(ps.Platform[name], t.opts...)
+			ps.Platform[name] = append(ps.Platform[name], optSeparator)
 		}
 	}
 }
@@ -285,9 +331,8 @@ func uniq(ss []string) []string {
 	return result
 }
 
-// Map applies a function to the strings in "ps" and returns a new
-// PlatformStrings with the results. This is useful for converting import
-// paths to labels.
+// Map applies a function that processes individual strings to the strings in
+// "ps" and returns a new PlatformStrings with the results.
 func (ps *PlatformStrings) Map(f func(string) (string, error)) (PlatformStrings, []error) {
 	result := PlatformStrings{Generic: make([]string, 0, len(ps.Generic))}
 	var errors []error
@@ -309,6 +354,30 @@ func (ps *PlatformStrings) Map(f func(string) (string, error)) (PlatformStrings,
 				} else {
 					result.Platform[n] = append(result.Platform[n], r)
 				}
+			}
+		}
+	}
+
+	return result, errors
+}
+
+// MapSlice applies a function that processes slices of strings to the strings
+// in "ps" and returns a new PlatformStrings with the results.
+func (ps *PlatformStrings) MapSlice(f func([]string) ([]string, error)) (PlatformStrings, []error) {
+	var result PlatformStrings
+	var errors []error
+	if r, err := f(ps.Generic); err != nil {
+		errors = append(errors, err)
+	} else {
+		result.Generic = r
+	}
+	if ps.Platform != nil {
+		result.Platform = make(map[string][]string)
+		for n, ss := range ps.Platform {
+			if r, err := f(ss); err != nil {
+				errors = append(errors, err)
+			} else {
+				result.Platform[n] = r
 			}
 		}
 	}

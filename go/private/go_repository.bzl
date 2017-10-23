@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@io_bazel_rules_go//go/private:toolchain.bzl", "executable_extension")
+
 def _go_repository_impl(ctx):
   if ctx.attr.urls:
     # explicit source url
@@ -36,7 +38,7 @@ def _go_repository_impl(ctx):
       rev = ctx.attr.tag
     else:
       fail("neither commit or tag is specified", "commit")
-    
+
     # Using fetch repo
     if ctx.attr.vcs and not ctx.attr.remote:
       fail("if vcs is specified, remote must also be")
@@ -49,10 +51,11 @@ def _go_repository_impl(ctx):
 
     # TODO(yugui): support submodule?
     # c.f. https://www.bazel.io/versions/master/docs/be/workspace.html#git_repository.init_submodules
+    _fetch_repo = "@io_bazel_rules_go_repository_tools//:bin/fetch_repo{}".format(executable_extension(ctx))
     result = env_execute(
         ctx,
         [
-            ctx.path(ctx.attr._fetch_repo),
+            ctx.path(Label(_fetch_repo)),
             '--dest', ctx.path(''),
             '--remote', ctx.attr.remote,
             '--rev', rev,
@@ -74,7 +77,8 @@ def _go_repository_impl(ctx):
         break
   if generate:
     # Build file generation is needed
-    gazelle = ctx.path(ctx.attr._gazelle)
+    _gazelle = "@io_bazel_rules_go_repository_tools//:bin/gazelle{}".format(executable_extension(ctx))
+    gazelle = ctx.path(Label(_gazelle))
     cmds = [gazelle, '--go_prefix', ctx.attr.importpath, '--mode', 'fix',
             '--repo_root', ctx.path(''),
             "--build_tags", ",".join(ctx.attr.build_tags)]
@@ -109,24 +113,9 @@ go_repository = repository_rule(
         "build_file_name": attr.string(default="BUILD.bazel,BUILD"),
         "build_file_generation": attr.string(default="auto", values=["on", "auto", "off"]),
         "build_tags": attr.string_list(),
-
-        # Hidden attributes for tool dependancies
-        "_fetch_repo": attr.label(
-            default = Label("@io_bazel_rules_go_repository_tools//:bin/fetch_repo"),
-            allow_files = True,
-            single_file = True,
-            executable = True,
-            cfg = "host",
-        ),
-        "_gazelle": attr.label(
-            default = Label("@io_bazel_rules_go_repository_tools//:bin/gazelle"),
-            allow_files = True,
-            single_file = True,
-            executable = True,
-            cfg = "host",
-        ),
     },
 )
+"""See go/workspace.rst#go-repository for full documentation."""
 
 def go_github_repository(name, repository_id, commit, sha256="", build_file_name="", importpath=""):
   return go_github_rule(name, repository_id, commit, "off", sha256, build_file_name, importpath)
