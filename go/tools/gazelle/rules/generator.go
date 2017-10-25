@@ -123,7 +123,7 @@ func (g *Generator) generateProto(pkg *packages.Package) (string, []bf.Expr) {
 	goProtoAttrs := []keyvalue{
 		{"name", goProtoName},
 		{"proto", ":" + protoName},
-		{"importpath", pkg.ImportPath(g.c.GoPrefix)},
+		{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)},
 		{"visibility", visibility},
 	}
 	resolveGoProto := func(imp string) (resolve.Label, error) {
@@ -160,7 +160,7 @@ func (g *Generator) generateBin(pkg *packages.Package, library string) bf.Expr {
 	attrs := g.commonAttrs(pkg.Rel, name, visibility, pkg.Binary)
 	// TODO(jayconrod): don't add importpath if it can be inherited from library.
 	// This is blocked by bazelbuild/bazel#3575.
-	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix)})
+	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)})
 	if library != "" {
 		attrs = append(attrs, keyvalue{"library", ":" + library})
 	}
@@ -181,7 +181,7 @@ func (g *Generator) generateLib(pkg *packages.Package, goProtoName string) (stri
 	}
 
 	attrs := g.commonAttrs(pkg.Rel, name, visibility, pkg.Library)
-	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix)})
+	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)})
 	if goProtoName != "" {
 		attrs = append(attrs, keyvalue{"library", ":" + goProtoName})
 	}
@@ -221,7 +221,7 @@ func checkInternalVisibility(rel, visibility string) string {
 func (g *Generator) generateTest(pkg *packages.Package, library string, isXTest bool) bf.Expr {
 	name := g.l.TestLabel(pkg.Rel, isXTest).Name
 	target := pkg.Test
-	importpath := pkg.ImportPath(g.c.GoPrefix)
+	importpath := pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)
 	if isXTest {
 		target = pkg.XTest
 		importpath += "_test"
