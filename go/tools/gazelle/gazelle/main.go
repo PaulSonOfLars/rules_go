@@ -305,6 +305,7 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 	external := fs.String("external", "external", "external: resolve external packages with go_repository\n\tvendored: resolve external packages as packages in vendor/")
 	var goPrefix explicitFlag
 	fs.Var(&goPrefix, "go_prefix", "prefix of import paths in the current workspace")
+	externalProtoRepo := fs.String("external_proto_repo", "", "external repo dependency where to look for non-local proto imports.")
 	prefixRoot := fs.String("prefix_root", "", "prefix_root of the target workspace")
 	repoRoot := fs.String("repo_root", "", "path to a directory which corresponds to go_prefix, otherwise gazelle searches for it.")
 	fs.Var(&knownImports, "known_import", "import path for which external resolution is skipped (can specify multiple times)")
@@ -381,7 +382,8 @@ func newConfiguration(args []string) (*config.Config, command, emitFunc, error) 
 	}
 
 	c.ShouldFix = cmd == fixCmd
-	c.PrefixRoot = *prefixRoot
+	c.PrefixRoot = strings.TrimRight(*prefixRoot, "/")
+	c.ExternalProtoRepo = *externalProtoRepo
 
 	c.DepMode, err = config.DependencyModeFromString(*external)
 	if err != nil {

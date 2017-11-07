@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"go/build"
 	"log"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/bazelbuild/rules_go/go/tools/gazelle/config"
@@ -79,11 +81,27 @@ func (r *Resolver) ResolveGo(imp, pkgRel string) (Label, error) {
 	case r.c.GoPrefix == "" || strings.HasPrefix(imp, r.c.GoPrefix+"/"):
 		pkg := strings.TrimPrefix(imp, r.c.GoPrefix+"/")
 		if strings.HasPrefix(pkg, "proto") {
+			// Check if this package exists in this repo. Otherwise get it from the ExternalProtoRepo.
+			realRoot := strings.TrimSuffix(r.c.RepoRoot, r.c.PrefixRoot)
+			protoPackagePath := filepath.Join(realRoot, pkg)
+
+			if _, err := os.Stat(protoPath); err != nil {
+				if !os.IsNotExist(err) {
+					return Label{}, fmt.Errorf("could not check existence of path %v", protoPackagePath)
+				}
+
+				// We cannot rely on the existing external resolver here.
+				return Label{
+					Repo: r.c.ExternalProtoRepo,
+					Pkg:  pkg,
+					Name: r.c.DefaultLibName,
+				}
+			}
 			return r.l.LibraryLabel(pkg), nil
 		}
-		
+
 		prefixRoot := r.c.PrefixRoot
-		if prefixRoot != "" && !strings.HasSuffix(prefixRoot, "/") {
+		if prefixRoot != "" {
 			prefixRoot += "/"
 		}
 		return r.l.LibraryLabel(prefixRoot + pkg), nil
