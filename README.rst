@@ -31,6 +31,9 @@ Travis   Jenkins
 Announcements
 -------------
 
+November 3, 2017
+  Release `0.7.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.7.0>`_
+  is now available.
 October 16, 2017
   We have a new mailing list: `bazel-go-discuss`_. All questions about building
   Go with Bazel and using Gazelle are welcome.
@@ -40,10 +43,6 @@ October 9, 2017
   Release `0.6.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.6.0>`_
   is now available. Bazel 0.5.4 or later is now required. The WORKSPACE
   boilerplate has also changed (see Setup_).
-September 13, 2017
-  Release `0.5.5 <https://github.com/bazelbuild/rules_go/releases/tag/0.5.5>`_ is now
-  available. This is a bug fix release on top of 0.5.4 that removes the sha256
-  from some of our dependencies, since it changed upstream.
 
 
 .. contents::
@@ -84,7 +83,7 @@ They currently do not support (in order of importance):
 * coverage
 * test sharding
 
-:Note: The latest version of these rules (0.6.0) require Bazel ≥ 0.6.0 to
+:Note: The latest version of these rules (0.7.0) require Bazel ≥ 0.6.0 to
   work.
 
 The ``master`` branch is only guaranteed to work with the latest version of Bazel.
@@ -103,8 +102,8 @@ Setup
 
     http_archive(
         name = "io_bazel_rules_go",
-        url = "https://github.com/bazelbuild/rules_go/releases/download/0.6.0/rules_go-0.6.0.tar.gz",
-        sha256 = "ba6feabc94a5d205013e70792accb6cce989169476668fbaf98ea9b342e13b59",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.7.0/rules_go-0.7.0.tar.gz",
+        sha256 = "91fca9cf860a1476abdc185a5f675b641b60d3acf0596679a27b580af60bf19c",
     )
     load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
     go_rules_dependencies()
@@ -282,3 +281,29 @@ is just the prefix concatenated with the package name. So if your library is
 We are working on deprecating ``go_prefix`` and making ``importpath`` mandatory (see
 `#721`_). When this work is   complete, the ``go_default_library`` name won't be needed.
 We may decide to stop using this name in the future (see `#265`_).
+
+How do I access testdata?
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Bazel executes tests in a sandbox, which means tests don't automatically have
+access to files. You must include test files using the ``data`` attribute.
+For example, if you want to include everything in the ``testdata`` directory:
+
+.. code:: bzl
+
+  go_test(
+      name = "go_default_test",
+      srcs = ["foo_test.go"],
+      data = glob(["testdata/**"]),
+      importpath = "github.com/example/project/foo",
+  )
+
+By default, tests are run in the directory of the build file that defined them.
+Note that this follows the Go testing convention, not the Bazel convention
+followed by other languages, which run in the repository root. This means
+that you can access test files using relative paths. You can change the test
+directory using the ``rundir`` attribute. See go_test_.
+
+Gazelle will automatically add a ``data`` attribute like the one above if you
+have a ``testdata`` directory *unless* it contains buildable .go files or
+build files, in which case, ``testdata`` is treated as a normal package.

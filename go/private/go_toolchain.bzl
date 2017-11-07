@@ -14,6 +14,7 @@
 """
 Toolchain rules used by go.
 """
+load("@io_bazel_rules_go//go/private:actions/archive.bzl", "emit_archive")
 load("@io_bazel_rules_go//go/private:actions/asm.bzl", "emit_asm")
 load("@io_bazel_rules_go//go/private:actions/binary.bzl", "emit_binary")
 load("@io_bazel_rules_go//go/private:actions/compile.bzl", "emit_compile", "bootstrap_compile")
@@ -23,12 +24,29 @@ load("@io_bazel_rules_go//go/private:actions/link.bzl", "emit_link", "bootstrap_
 load("@io_bazel_rules_go//go/private:actions/pack.bzl", "emit_pack")
 load("@io_bazel_rules_go//go/private:providers.bzl", "GoStdLib")
 
+def _get_stdlib(ctx, go_toolchain, mode):
+  if mode.race and mode.pure:
+    return go_toolchain.stdlib.pure_race
+  elif mode.pure:
+    return go_toolchain.stdlib.pure
+  elif mode.race:
+    return go_toolchain.stdlib.cgo_race
+  else:
+    return go_toolchain.stdlib.cgo
 
 def _go_toolchain_impl(ctx):
   return [platform_common.ToolchainInfo(
       name = ctx.label.name,
-      stdlib = ctx.attr._stdlib[GoStdLib],
+      cross_compile = ctx.attr.cross_compile,
+      stdlib = struct(
+          cgo = ctx.attr._stdlib_cgo[GoStdLib],
+          pure = ctx.attr._stdlib_pure[GoStdLib],
+          cgo_race = ctx.attr._stdlib_cgo_race[GoStdLib],
+          pure_race = ctx.attr._stdlib_pure_race[GoStdLib],
+          get = _get_stdlib,
+      ),
       actions = struct(
+          archive = emit_archive,
           asm = emit_asm,
           binary = emit_binary,
           compile = emit_compile if ctx.executable._compile else bootstrap_compile,
@@ -38,7 +56,6 @@ def _go_toolchain_impl(ctx):
           pack = emit_pack,
       ),
       tools = struct(
-          go = ctx.executable._go,
           asm = ctx.executable._asm,
           compile = ctx.executable._compile,
           pack = ctx.executable._pack,
@@ -53,22 +70,22 @@ def _go_toolchain_impl(ctx):
           link_cgo = ctx.attr.cgo_link_flags,
       ),
       data = struct(
-          tools = ctx.files._tools,
-          stdlib = ctx.files._stdlib,
-          headers = ctx.attr._headers,
           crosstool = ctx.files._crosstool,
           package_list = ctx.file._package_list,
       ),
-      external_linker = ctx.attr._external_linker,
   )]
 
-def _stdlib(goos, goarch):
-  return Label("@go_sdk//:stdlib_{}_{}".format(goos, goarch))
+def _stdlib_cgo(goos, goarch):
+  return Label("@go_stdlib_{}_{}_cgo".format(goos, goarch))
 
-def _get_linker():
-  # TODO: return None if there is no cpp fragment available
-  # This is not possible right now, we need a new bazel feature
-  return Label("//go/toolchain:external_linker")
+def _stdlib_pure(goos, goarch):
+  return Label("@go_stdlib_{}_{}_pure".format(goos, goarch))
+
+def _stdlib_cgo_race(goos, goarch):
+  return Label("@go_stdlib_{}_{}_cgo_race".format(goos, goarch))
+
+def _stdlib_pure_race(goos, goarch):
+  return Label("@go_stdlib_{}_{}_pure_race".format(goos, goarch))
 
 def _asm(bootstrap):
   if bootstrap:
@@ -111,6 +128,7 @@ _go_toolchain = rule(
         # Minimum requirements to specify a toolchain
         "goos": attr.string(mandatory = True),
         "goarch": attr.string(mandatory = True),
+        "cross_compile": attr.bool(default = False),
         # Optional extras to a toolchain
         "link_flags": attr.string_list(default = []),
         "cgo_link_flags": attr.string_list(default = []),
@@ -124,13 +142,12 @@ _go_toolchain = rule(
         "_test_generator": attr.label(allow_files = True, single_file = True, executable = True, cfg = "host", default = _test_generator),
         "_cover": attr.label(allow_files = True, single_file = True, executable = True, cfg = "host", default = _cover),
         # Hidden internal attributes
-        "_go": attr.label(allow_files = True, single_file = True, executable = True, cfg = "host", default="@go_sdk//:go"),
-        "_tools": attr.label(allow_files = True, default = "@go_sdk//:tools"),
-        "_stdlib": attr.label(allow_files = True, default = _stdlib),
-        "_headers": attr.label(default="@go_sdk//:headers"),
+        "_stdlib_cgo": attr.label(allow_files = True, default = _stdlib_cgo),
+        "_stdlib_pure": attr.label(allow_files = True, default = _stdlib_pure),
+        "_stdlib_cgo_race": attr.label(allow_files = True, default = _stdlib_cgo_race),
+        "_stdlib_pure_race": attr.label(allow_files = True, default = _stdlib_pure_race),
         "_crosstool": attr.label(default=Label("//tools/defaults:crosstool")),
         "_package_list": attr.label(allow_files = True, single_file = True, default="@go_sdk//:packages.txt"),
-        "_external_linker": attr.label(default=_get_linker),
     },
 )
 
@@ -138,6 +155,7 @@ def go_toolchain(name, target, host=None, constraints=[], **kwargs):
   """See go/toolchains.rst#go-toolchain for full documentation."""
 
   if not host: host = target
+  cross = host != target
   goos, _, goarch = target.partition("_")
   target_constraints = constraints + [
     "@io_bazel_rules_go//go/toolchain:" + goos,
@@ -154,6 +172,7 @@ def go_toolchain(name, target, host=None, constraints=[], **kwargs):
       name = impl_name,
       goos = goos,
       goarch = goarch,
+      cross_compile = cross,
       bootstrap = False,
       tags = ["manual"],
       visibility = ["//visibility:public"],
@@ -167,7 +186,7 @@ def go_toolchain(name, target, host=None, constraints=[], **kwargs):
       toolchain = ":"+impl_name,
   )
 
-  if host == target:
+  if not cross:
     # If not cross, register a bootstrap toolchain
     name = name + "-bootstrap"
     impl_name = name + "-impl"
@@ -201,25 +220,3 @@ go_toolchain_flags = rule(
         "strip": attr.string(mandatory=True),
     },
 )
-
-def _external_linker_impl(ctx):
-  cpp = ctx.fragments.cpp
-  features = ctx.features
-  options = (cpp.compiler_options(features) +
-        cpp.unfiltered_compiler_options(features) +
-        cpp.link_options +
-        cpp.mostly_static_link_options(features, False))
-  return struct(
-      compiler_executable = cpp.compiler_executable,
-      options = options,
-      c_options = cpp.c_options,
-  )
-
-_external_linker = rule(
-    _external_linker_impl,
-    attrs = {},
-    fragments = ["cpp"],
-)
-
-def external_linker():
-    _external_linker(name="external_linker")

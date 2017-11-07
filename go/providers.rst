@@ -79,22 +79,6 @@ binaries or tests.
 +--------------------------------+-----------------------------------------------------------------+
 | The files needed to run anything that includes this library.                                     |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`normal_library`        | :type:`File`                                                    |
-+--------------------------------+-----------------------------------------------------------------+
-| The archive file representing the library compiled with the default options.                     |
-+--------------------------------+-----------------------------------------------------------------+
-| :param:`normal_searchpath`     | :type:`string`                                                  |
-+--------------------------------+-----------------------------------------------------------------+
-| The search path entry under which the :param:`normal_library` would be found.                    |
-+--------------------------------+-----------------------------------------------------------------+
-| :param:`race_library`          | :type:`File`                                                    |
-+--------------------------------+-----------------------------------------------------------------+
-| The archive file representing the library compiled with the race detector enabled.               |
-+--------------------------------+-----------------------------------------------------------------+
-| :param:`race_searchpath`       | :type:`string`                                                  |
-+--------------------------------+-----------------------------------------------------------------+
-| The search path entry under which the :param:`race_library` would be found.                      |
-+--------------------------------+-----------------------------------------------------------------+
 
 
 GoEmbed
@@ -152,25 +136,24 @@ There are two main uses for this.
 +--------------------------------+-----------------------------------------------------------------+
 
 
-GoBinary
-~~~~~~~~
+GoArchive
+~~~~~~~~~
 
-This is the provider returned by anything that links an executable Go binary. This includes both
-the go_binary_ rule and the go_test_ rule.
+GoArchive is a provider that exposes a compiled library.
 
 +--------------------------------+-----------------------------------------------------------------+
 | **Name**                       | **Type**                                                        |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`executable`            | :type:`File`                                                    |
+| :param:`lib`                   | :type:`compiled archive file`                                   |
 +--------------------------------+-----------------------------------------------------------------+
-| The default executable binary produced by this rule.                                             |
-| This is the file that would be invoked using ``bazel run``.                                      |
+| The archive file representing the library compiled in a specific :param:`mode` ready for linking |
+| into binaries.                                                                                   |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`static`                | :type:`File`                                                    |
+| :param:`searchpath`            | :type:`string`                                                  |
 +--------------------------------+-----------------------------------------------------------------+
-| The binary compiled in `static linking`_ mode.                                                      |
+| The search path entry under which the :param:`lib` would be found.                               |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`race`                  | :type:`File`                                                    |
+| :param:`mode`                  | :type:`Mode`                                                    |
 +--------------------------------+-----------------------------------------------------------------+
-| The binary compiled with the `race detector`_ turned on.                                            |
+| The mode the library was compiled in.                                                            |
 +--------------------------------+-----------------------------------------------------------------+

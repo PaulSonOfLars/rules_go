@@ -12,8 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl", "dict_of", "split_srcs", "join_srcs", "pkg_dir")
-load("@io_bazel_rules_go//go/private:providers.bzl", "CgoInfo", "GoLibrary")
+load("@io_bazel_rules_go//go/private:common.bzl",
+    "dict_of",
+    "split_srcs",
+    "join_srcs",
+    "pkg_dir"
+)
+load("@io_bazel_rules_go//go/private:mode.bzl",
+    "get_mode",
+)
+load("@io_bazel_rules_go//go/private:providers.bzl",
+    "CgoInfo",
+    "GoLibrary",
+)
 load("@io_bazel_rules_go//go/private:actions/action.bzl",
     "action_with_go_env",
 )
@@ -46,10 +57,12 @@ def _select_archive(files):
 
 def _cgo_codegen_impl(ctx):
   go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-  if not go_toolchain.external_linker:
+  mode = get_mode(ctx)
+  stdlib = go_toolchain.stdlib.get(ctx, go_toolchain, mode)
+  if not stdlib.cgo_tools:
     fail("Go toolchain does not support cgo")
   linkopts = ctx.attr.linkopts[:]
-  copts = go_toolchain.external_linker.c_options + ctx.attr.copts
+  copts = stdlib.cgo_tools.c_options + ctx.attr.copts
   deps = depset([], order="topological")
   cgo_export_h = ctx.new_file(ctx.attr.out_dir + "/_cgo_export.h")
   cgo_export_c = ctx.new_file(ctx.attr.out_dir + "/_cgo_export.c")
@@ -57,7 +70,7 @@ def _cgo_codegen_impl(ctx):
   cgo_types = ctx.new_file(ctx.attr.out_dir + "/_cgo_gotypes.go")
   out_dir = cgo_main.dirname
 
-  cc = go_toolchain.external_linker.compiler_executable
+  cc = stdlib.cgo_tools.compiler_executable
   args = ["-cc", str(cc), "-objdir", out_dir]
 
   c_outs = depset([cgo_export_h, cgo_export_c])
@@ -107,7 +120,7 @@ def _cgo_codegen_impl(ctx):
   # The first -- below is to stop the cgo from processing args, the
   # second is an actual arg to forward to the underlying go tool
   args += ["--", "--"] + copts
-  action_with_go_env(ctx, go_toolchain,
+  action_with_go_env(ctx, go_toolchain, mode,
       inputs = inputs,
       outputs = list(c_outs + go_outs + [cgo_main]),
       mnemonic = "CGoCodeGen",
@@ -154,13 +167,14 @@ _cgo_codegen = rule(
 
 def _cgo_import_impl(ctx):
   go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
+  mode = get_mode(ctx)
   args = [
       "-dynout", ctx.outputs.out.path,
       "-dynimport", ctx.file.cgo_o.path,
       "-src", ctx.files.sample_go_srcs[0].path,
   ]
 
-  action_with_go_env(ctx, go_toolchain,
+  action_with_go_env(ctx, go_toolchain, mode,
       inputs = [
           ctx.file.cgo_o,
           ctx.files.sample_go_srcs[0],

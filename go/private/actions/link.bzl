@@ -12,14 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "NORMAL_MODE",
-    "RACE_MODE",
-    "STATIC_MODE",
-)
-load("@io_bazel_rules_go//go/private:providers.bzl",
-    "get_library",
-    "get_searchpath",
+load("@io_bazel_rules_go//go/private:mode.bzl",
+    "LINKMODE_NORMAL",
 )
 load("@io_bazel_rules_go//go/private:actions/action.bzl",
     "action_with_go_env",
@@ -27,45 +21,50 @@ load("@io_bazel_rules_go//go/private:actions/action.bzl",
 )
 
 def emit_link(ctx, go_toolchain,
-    library = None,
-    mode = NORMAL_MODE,
+    archive = None,
+    mode = None,
     executable = None,
     gc_linkopts = [],
     x_defs = {}):
   """See go/toolchains.rst#link for full documentation."""
 
-  if library == None: fail("library is a required parameter")
+  if archive == None: fail("archive is a required parameter")
   if executable == None: fail("executable is a required parameter")
+  if mode == None: fail("mode is a required parameter")
 
+  stdlib = go_toolchain.stdlib.get(ctx, go_toolchain, mode)
 
   config_strip = len(ctx.configuration.bin_dir.path) + 1
   pkg_depth = executable.dirname[config_strip:].count('/') + 1
 
   ld = None
   extldflags = []
-  if go_toolchain.external_linker:
-    ld = go_toolchain.external_linker.compiler_executable
-    extldflags = list(go_toolchain.external_linker.options)
+  if stdlib.cgo_tools:
+    ld = stdlib.cgo_tools.compiler_executable
+    extldflags = list(stdlib.cgo_tools.options)
   extldflags += ["-Wl,-rpath,$ORIGIN/" + ("../" * pkg_depth)]
 
   gc_linkopts, extldflags = _extract_extldflags(gc_linkopts, extldflags)
 
-  libmode = mode
   # Add in any mode specific behaviours
-  if mode == RACE_MODE:
+  if mode.race:
     gc_linkopts += ["-race"]
-  elif mode == STATIC_MODE:
-    libmode = NORMAL_MODE
+  if mode.msan:
+    gc_linkopts += ["-msan"]
+  if mode.static:
     gc_linkopts = gc_linkopts + ["-linkmode", "external"]
     extldflags.append("-static")
+  if mode.link != LINKMODE_NORMAL:
+    fail("Link mode {} is not yet supported".format(mode.link))
 
+  libs = depset([archive.file])
   link_opts = ["-L", "."]
-  libs = depset()
   cgo_deps = depset()
-  for golib in depset([library]) + library.transitive:
-    libs += [get_library(golib, libmode)]
-    link_opts += ["-L", get_searchpath(golib, libmode)]
-    cgo_deps += golib.cgo_deps
+  for a in archive.transitive:
+    libs += [a.file]
+    link_opts += ["-L", a.searchpath]
+    if a.embed.cgo_info:
+      cgo_deps += a.embed.cgo_info.deps
 
   for d in cgo_deps:
     if d.basename.endswith('.so'):
@@ -84,10 +83,7 @@ def emit_link(ctx, go_toolchain,
       link_opts += ["-X", "%s=%s" % (k, v)]
 
   link_opts.extend(go_toolchain.flags.link)
-  if ctx.attr._go_toolchain_flags.strip == "always":
-    link_opts.extend(["-w"])
-  elif (ctx.attr._go_toolchain_flags.strip == "sometimes" and
-       ctx.attr._go_toolchain_flags.compilation_mode != "debug"):
+  if mode.strip:
     link_opts.extend(["-w"])
 
   if ld:
@@ -95,7 +91,7 @@ def emit_link(ctx, go_toolchain,
         "-extld", ld,
         "-extldflags", " ".join(extldflags),
     ]
-  link_opts += [get_library(golib, libmode).path]
+  link_opts += [archive.file.path]
   link_args = []
   # Stamping support
   stamp_inputs = []
@@ -113,7 +109,7 @@ def emit_link(ctx, go_toolchain,
 
   link_args += ["--"] + link_opts
 
-  action_with_go_env(ctx, go_toolchain,
+  action_with_go_env(ctx, go_toolchain, mode,
       inputs = list(libs + cgo_deps +
                 go_toolchain.data.crosstool + stamp_inputs),
       outputs = [executable],
@@ -123,21 +119,21 @@ def emit_link(ctx, go_toolchain,
   )
 
 def bootstrap_link(ctx, go_toolchain,
-    library = None,
-    mode = NORMAL_MODE,
+    archive = None,
+    mode = None,
     executable = None,
     gc_linkopts = [],
     x_defs = {}):
   """See go/toolchains.rst#link for full documentation."""
 
-  if library == None: fail("library is a required parameter")
+  if archive == None: fail("archive is a required parameter")
   if executable == None: fail("executable is a required parameter")
+  if mode == None: fail("mode is a required parameter")
 
   if x_defs:  fail("link does not accept x_defs in bootstrap mode")
 
-  lib = get_library(library, NORMAL_MODE)
-  inputs = depset([lib])
-  args = ["tool", "link", "-o", executable.path] + list(gc_linkopts) + [lib.path]
+  inputs = depset([archive.file])
+  args = ["tool", "link", "-o", executable.path] + list(gc_linkopts) + [archive.file.path]
   bootstrap_action(ctx, go_toolchain,
       inputs = list(inputs),
       outputs = [executable],

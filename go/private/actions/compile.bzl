@@ -12,14 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "NORMAL_MODE",
-    "RACE_MODE",
-)
-load("@io_bazel_rules_go//go/private:providers.bzl",
-    "get_library",
-    "get_searchpath",
-)
 load("@io_bazel_rules_go//go/private:actions/action.bzl",
     "action_with_go_env",
     "bootstrap_action",
@@ -28,18 +20,21 @@ load("@io_bazel_rules_go//go/private:actions/action.bzl",
 def emit_compile(ctx, go_toolchain,
     sources = None,
     importpath = "",
-    golibs = [],
-    mode = NORMAL_MODE,
+    archives = [],
+    mode = None,
     out_lib = None,
     gc_goopts = []):
   """See go/toolchains.rst#compile for full documentation."""
 
   if sources == None: fail("sources is a required parameter")
   if out_lib == None: fail("out_lib is a required parameter")
+  if mode == None: fail("mode is a required parameter")
 
   # Add in any mode specific behaviours
-  if mode == RACE_MODE:
+  if mode.race:
     gc_goopts = gc_goopts + ("-race",)
+  if mode.msan:
+    gc_goopts = gc_goopts + ("-msan",)
 
   gc_goopts = [ctx.expand_make_variables("gc_goopts", f, {}) for f in gc_goopts]
   inputs = sources + [go_toolchain.data.package_list]
@@ -48,20 +43,20 @@ def emit_compile(ctx, go_toolchain,
   args = ["-package_list", go_toolchain.data.package_list.path]
   for src in go_sources:
     args += ["-src", src]
-  for golib in golibs:
-    inputs += [get_library(golib, mode)]
-    args += ["-dep", golib.importpath]
-    args += ["-I", get_searchpath(golib,mode)]
+  for archive in archives:
+    inputs += [archive.file]
+    args += ["-dep", archive.library.importpath]
+    args += ["-I", archive.searchpath]
   args += ["-o", out_lib.path, "-trimpath", ".", "-I", "."]
   args += ["--"]
   if importpath:
     args += ["-p", importpath]
   args.extend(gc_goopts)
   args.extend(go_toolchain.flags.compile)
-  if ctx.attr._go_toolchain_flags.compilation_mode == "debug":
+  if mode.debug:
     args.extend(["-N", "-l"])
   args.extend(cgo_sources)
-  action_with_go_env(ctx, go_toolchain,
+  action_with_go_env(ctx, go_toolchain, mode,
       inputs = list(inputs),
       outputs = [out_lib],
       mnemonic = "GoCompile",
@@ -73,15 +68,16 @@ def emit_compile(ctx, go_toolchain,
 def bootstrap_compile(ctx, go_toolchain,
     sources = None,
     importpath = "",
-    golibs = [],
-    mode = NORMAL_MODE,
+    archives = [],
+    mode = None,
     out_lib = None,
     gc_goopts = []):
   """See go/toolchains.rst#compile for full documentation."""
 
   if sources == None: fail("sources is a required parameter")
   if out_lib == None: fail("out_lib is a required parameter")
-  if golibs:  fail("compile does not accept deps in bootstrap mode")
+  if archives:  fail("compile does not accept deps in bootstrap mode")
+  if mode == None: fail("mode is a required parameter")
 
   args = ["tool", "compile", "-o", out_lib.path] + list(gc_goopts) + [s.path for s in sources]
   bootstrap_action(ctx, go_toolchain,

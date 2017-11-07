@@ -20,11 +20,13 @@ def emit_pack(ctx, go_toolchain,
     in_lib = None,
     out_lib = None,
     objects = (),
-    archive = None):
+    archive = None,
+    mode = None):
   """See go/toolchains.rst#pack for full documentation."""
 
   if in_lib == None: fail("in_lib is a required parameter")
   if out_lib == None: fail("out_lib is a required parameter")
+  if mode == None: fail("mode is a required parameter")
 
   inputs = [in_lib]
 
@@ -40,7 +42,7 @@ def emit_pack(ctx, go_toolchain,
     inputs.append(archive)
     arguments.extend(["-arc", archive.path])
 
-  action_with_go_env(ctx, go_toolchain,
+  action_with_go_env(ctx, go_toolchain, mode,
       inputs = inputs,
       outputs = [out_lib],
       mnemonic = "GoPack",

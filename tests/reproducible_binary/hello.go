@@ -1,4 +1,4 @@
-/* Copyright 2016 The Bazel Authors. All rights reserved.
+/* Copyright 2017 The Bazel Authors. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,19 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package testdata provides convenient access to testdata files
-package testdata
+package main
 
-import (
-	"os"
-	"path/filepath"
-)
+import "fmt"
 
-// Dir returns a path to the testdata directory.
-func Dir() string {
-	srcdir := os.Getenv("TEST_SRCDIR")
-	return filepath.Join(
-		srcdir, os.Getenv("TEST_WORKSPACE"),
-		"go", "tools", "gazelle", "testdata",
-	)
+func main() {
+	// Call a function from the standard library. The test will check whether
+	// the path to the source file that defines this function gets embedded
+	// in the binary.
+	fmt.Println("Hello, world!")
 }

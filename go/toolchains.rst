@@ -240,7 +240,7 @@ SDK will be used.
 +--------------------------------+-----------------------------+-----------------------------------+
 | **Name**                       | **Type**                    | **Default value**                 |
 +--------------------------------+-----------------------------+-----------------------------------+
-| :param:`go_version`            | :type:`string`              | :value:`"1.9.1"`                  |
+| :param:`go_version`            | :type:`string`              | :value:`"1.9.2"`                  |
 +--------------------------------+-----------------------------+-----------------------------------+
 | This specifies the Go version to select.                                                         |
 | It will match the version specification of the toochain which for normal sdk toolchains is       |
@@ -456,7 +456,7 @@ binary
 This emits actions to compile and link Go code into a binary.
 It supports embedding, cgo dependencies, coverage, and assembling and packing .s files.
 
-It returns a tuple of GoLibrary_ and GoBinary_.
+It returns GoLibrary_.
 
 +--------------------------------+-----------------------------+-----------------------------------+
 | **Name**                       | **Type**                    | **Default value**                 |
@@ -472,6 +472,10 @@ It returns a tuple of GoLibrary_ and GoBinary_.
 | :param:`name`                  | :type:`string`              | |mandatory|                       |
 +--------------------------------+-----------------------------+-----------------------------------+
 | The base name of the generated binaries.                                                         |
++--------------------------------+-----------------------------+-----------------------------------+
+| :param:`executable`            | :type:`File`                | |mandatory|                       |
++--------------------------------+-----------------------------+-----------------------------------+
+| The binary to produce.                                                                           |
 +--------------------------------+-----------------------------+-----------------------------------+
 | :param:`srcs`                  | :type:`File iterable`       | :value:`[]`                       |
 +--------------------------------+-----------------------------+-----------------------------------+
@@ -503,11 +507,6 @@ It returns a tuple of GoLibrary_ and GoBinary_.
 | :param:`x_defs`                | :type:`map`                 | :value:`{}`                       |
 +--------------------------------+-----------------------------+-----------------------------------+
 | Link defines, including build stamping ones.                                                     |
-+--------------------------------+-----------------------------+-----------------------------------+
-| :param:`golibs`                | :type:`GoLibrary iterable`  | :value:`[]`                       |
-+--------------------------------+-----------------------------+-----------------------------------+
-| An iterable of GoLibrary_ objects.                                                               |
-| Used to pass in synthetic dependencies.                                                          |
 +--------------------------------+-----------------------------+-----------------------------------+
 
 
@@ -639,11 +638,6 @@ It returns a tuple of GoLibrary_ and GoEmbed_.
 | :param:`importable`            | :type:`boolean`             | :value:`True`                     |
 +--------------------------------+-----------------------------+-----------------------------------+
 | A bool indicating whether the package can be imported by other libraries.                        |
-+--------------------------------+-----------------------------+-----------------------------------+
-| :param:`golibs`                | :type:`GoLibrary iterable`  | :value:`[]`                       |
-+--------------------------------+-----------------------------+-----------------------------------+
-| An iterable of GoLibrary_ objects.                                                               |
-| Used to pass in synthetic dependencies.                                                          |
 +--------------------------------+-----------------------------+-----------------------------------+
 
 
