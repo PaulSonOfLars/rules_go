@@ -33,7 +33,11 @@ import (
 // "oldFile" is the existing build file. May be nil.
 func NewGenerator(c *config.Config, l resolve.Labeler, buildRel string, oldFile *bf.File) *Generator {
 	shouldSetVisibility := oldFile == nil || !hasDefaultVisibility(oldFile)
-	return &Generator{c: c, l: l, buildRel: buildRel, shouldSetVisibility: shouldSetVisibility}
+	prefixRoot := ""
+	if c.PrefixRoot != "" {
+		prefixRoot = c.PrefixRoot + "/"
+	}
+	return &Generator{c: c, l: l, buildRel: prefixRoot + buildRel, shouldSetVisibility: shouldSetVisibility}
 }
 
 // Generator generates Bazel build rules for Go build targets.
