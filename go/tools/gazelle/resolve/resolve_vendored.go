@@ -17,13 +17,13 @@ package resolve
 
 // vendoredResolver resolves external packages as packages in vendor/.
 type vendoredResolver struct {
-	l          Labeler
+	l          *Labeler
 	prefixRoot string
 }
 
 var _ nonlocalResolver = (*vendoredResolver)(nil)
 
-func newVendoredResolver(l Labeler, prefixRoot string) *vendoredResolver {
+func newVendoredResolver(l *Labeler, prefixRoot string) *vendoredResolver {
 	return &vendoredResolver{
 		l:          l,
 		prefixRoot: prefixRoot,

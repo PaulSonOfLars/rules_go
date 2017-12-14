@@ -18,6 +18,7 @@ load("//go/private:skylib/lib/paths.bzl", "paths")
 load("//go/private:skylib/lib/sets.bzl", "sets")
 load("//go/private:skylib/lib/shell.bzl", "shell")
 load("//go/private:skylib/lib/structs.bzl", "structs")
+load("@io_bazel_rules_go//go/private:mode.bzl", "mode_string")
 
 DEFAULT_LIB = "go_default_library"
 VENDOR_PREFIX = "/vendor/"
@@ -122,7 +123,7 @@ def go_importpath(ctx):
     path = path[1:]
   return path
 
-def env_execute(ctx, arguments, environment = None, **kwargs):
+def env_execute(ctx, arguments, environment = {}, **kwargs):
   """env_executes a command in a repository context. It prepends "env -i"
   to "arguments" before calling "ctx.execute".
 
@@ -131,12 +132,26 @@ def env_execute(ctx, arguments, environment = None, **kwargs):
   in most situations.
   """
   env_args = ["env", "-i"]
-  if environment:
-    for k, v in environment.items():
-      env_args.append("%s=%s" % (k, v))
+  environment = dict(environment)
+  for var in ["TMP", "TMPDIR"]:
+    if var in ctx.os.environ and not var in environment:
+      environment[var] = ctx.os.environ[var]
+  for k, v in environment.items():
+    env_args.append("%s=%s" % (k, v))
   return ctx.execute(env_args + arguments, **kwargs)
 
 def to_set(v):
   if type(v) == "depset":
     fail("Do not pass a depset to to_set")
   return depset(v)
+
+def declare_file(ctx, path="", ext="", mode=None, name = ""):
+  filename = ""
+  if mode:
+    filename += mode_string(mode) + "/"
+  filename += name if name else ctx.label.name
+  if path:
+    filename += "~/" + path
+  if ext:
+    filename += ext
+  return ctx.actions.declare_file(filename)

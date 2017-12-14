@@ -96,17 +96,11 @@ func (p *Package) isBuildable(c *config.Config) bool {
 		p.Proto.HasProto() && c.ProtoMode == config.DefaultProtoMode
 }
 
-// ImportPath returns the inferred Go import path for this package. This
-// is determined as follows:
-//
-// * If "vendor" is a component in p.Rel, everything after the last "vendor"
-//   component is returned.
-// * Otherwise, prefix joined with Rel is returned.
-//
+// ImportPath returns the inferred Go import path for this package.
 // TODO(jayconrod): extract canonical import paths from comments on
 // package statements.
-func (p *Package) ImportPath(prefix string, prefixRoot string) string {
-	rel := strings.TrimPrefix(p.Rel, prefixRoot)
+func (p *Package) ImportPath(c *config.Config) string {
+	rel := strings.TrimPrefix(p.Rel, c.PrefixRoot)
 
 	components := strings.Split(rel, "/")
 	for i := len(components) - 1; i >= 0; i-- {
@@ -115,7 +109,7 @@ func (p *Package) ImportPath(prefix string, prefixRoot string) string {
 		}
 	}
 
-	return path.Join(prefix, rel)
+	return path.Join(c.GoPrefix, rel)
 }
 
 // firstGoFile returns the name of a .go file if the package contains at least
@@ -261,79 +255,67 @@ func (ps *PlatformStrings) addStrings(c *config.Config, info fileInfo, cgoTags t
 // a PlatformStrings object under the same set of constraints. This is a
 // performance optimization to avoid evaluating constraints repeatedly.
 func getPlatformStringsAddFunction(c *config.Config, info fileInfo, cgoTags tagLine) func(ps *PlatformStrings, ss ...string) {
-	if checkConstraints(c, "", "", info.goos, info.goarch, info.tags, cgoTags) {
-		return func(ps *PlatformStrings, ss ...string) {
-			ps.Generic = append(ps.Generic, ss...)
-		}
-	}
+	isOSSpecific, isArchSpecific := isOSArchSpecific(info, cgoTags)
 
-	if !c.ExperimentalPlatforms {
+	switch {
+	case !isOSSpecific && !isArchSpecific:
+		if checkConstraints(c, "", "", info.goos, info.goarch, info.tags, cgoTags) {
+			return func(ps *PlatformStrings, ss ...string) {
+				ps.Generic = append(ps.Generic, ss...)
+			}
+		}
+
+	case isOSSpecific && !isArchSpecific:
+		var osMatch []string
+		for _, os := range config.KnownOSs {
+			if checkConstraints(c, os, "", info.goos, info.goarch, info.tags, cgoTags) {
+				osMatch = append(osMatch, os)
+			}
+		}
+		if len(osMatch) > 0 {
+			return func(ps *PlatformStrings, ss ...string) {
+				if ps.OS == nil {
+					ps.OS = make(map[string][]string)
+				}
+				for _, os := range osMatch {
+					ps.OS[os] = append(ps.OS[os], ss...)
+				}
+			}
+		}
+
+	case !isOSSpecific && isArchSpecific:
+		var archMatch []string
+		for _, arch := range config.KnownArchs {
+			if checkConstraints(c, "", arch, info.goos, info.goarch, info.tags, cgoTags) {
+				archMatch = append(archMatch, arch)
+			}
+		}
+		if len(archMatch) > 0 {
+			return func(ps *PlatformStrings, ss ...string) {
+				if ps.Arch == nil {
+					ps.Arch = make(map[string][]string)
+				}
+				for _, arch := range archMatch {
+					ps.Arch[arch] = append(ps.Arch[arch], ss...)
+				}
+			}
+		}
+
+	default:
 		var platformMatch []config.Platform
-		for _, platform := range config.DefaultPlatforms {
+		for _, platform := range config.KnownPlatforms {
 			if checkConstraints(c, platform.OS, platform.Arch, info.goos, info.goarch, info.tags, cgoTags) {
 				platformMatch = append(platformMatch, platform)
 			}
 		}
-		if len(platformMatch) == 0 {
-			return func(_ *PlatformStrings, _ ...string) {}
-		}
-		return func(ps *PlatformStrings, ss ...string) {
-			if ps.Platform == nil {
-				ps.Platform = make(map[config.Platform][]string)
-			}
-			for _, platform := range platformMatch {
-				ps.Platform[platform] = append(ps.Platform[platform], ss...)
-			}
-		}
-	}
-
-	var osMatch []string
-	for _, os := range config.KnownOSs {
-		if checkConstraints(c, os, "", info.goos, info.goarch, info.tags, cgoTags) {
-			osMatch = append(osMatch, os)
-		}
-	}
-	if len(osMatch) > 0 {
-		return func(ps *PlatformStrings, ss ...string) {
-			if ps.OS == nil {
-				ps.OS = make(map[string][]string)
-			}
-			for _, os := range osMatch {
-				ps.OS[os] = append(ps.OS[os], ss...)
-			}
-		}
-	}
-
-	var archMatch []string
-	for _, arch := range config.KnownArchs {
-		if checkConstraints(c, "", arch, info.goos, info.goarch, info.tags, cgoTags) {
-			archMatch = append(archMatch, arch)
-		}
-	}
-	if len(archMatch) > 0 {
-		return func(ps *PlatformStrings, ss ...string) {
-			if ps.Arch == nil {
-				ps.Arch = make(map[string][]string)
-			}
-			for _, arch := range archMatch {
-				ps.Arch[arch] = append(ps.Arch[arch], ss...)
-			}
-		}
-	}
-
-	var platformMatch []config.Platform
-	for _, platform := range config.KnownPlatforms {
-		if checkConstraints(c, platform.OS, platform.Arch, info.goos, info.goarch, info.tags, cgoTags) {
-			platformMatch = append(platformMatch, platform)
-		}
-	}
-	if len(platformMatch) > 0 {
-		return func(ps *PlatformStrings, ss ...string) {
-			if ps.Platform == nil {
-				ps.Platform = make(map[config.Platform][]string)
-			}
-			for _, platform := range platformMatch {
-				ps.Platform[platform] = append(ps.Platform[platform], ss...)
+		if len(platformMatch) > 0 {
+			return func(ps *PlatformStrings, ss ...string) {
+				if ps.Platform == nil {
+					ps.Platform = make(map[config.Platform][]string)
+				}
+				for _, platform := range platformMatch {
+					ps.Platform[platform] = append(ps.Platform[platform], ss...)
+				}
 			}
 		}
 	}

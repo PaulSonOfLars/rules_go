@@ -28,29 +28,26 @@ import (
 )
 
 // NewGenerator returns a new instance of Generator.
-// "buildRel" is a slash-separated path to the directory containing the
-// build file being generated, relative to the repository root.
 // "oldFile" is the existing build file. May be nil.
-func NewGenerator(c *config.Config, l resolve.Labeler, buildRel string, oldFile *bf.File) *Generator {
+func NewGenerator(c *config.Config, l *resolve.Labeler, oldFile *bf.File) *Generator {
 	shouldSetVisibility := oldFile == nil || !hasDefaultVisibility(oldFile)
-	prefixRoot := ""
-	if c.PrefixRoot != "" {
-		prefixRoot = c.PrefixRoot + "/"
-	}
-	return &Generator{c: c, l: l, buildRel: prefixRoot + buildRel, shouldSetVisibility: shouldSetVisibility}
+	return &Generator{c: c, l: l, shouldSetVisibility: shouldSetVisibility}
 }
 
 // Generator generates Bazel build rules for Go build targets.
 type Generator struct {
 	c                   *config.Config
-	l                   resolve.Labeler
-	buildRel            string
+	l                   *resolve.Labeler
 	shouldSetVisibility bool
 }
 
 // GenerateRules generates a list of rules for targets in "pkg". It also returns
 // a list of empty rules that may be deleted from an existing file.
-func (g *Generator) GenerateRules(pkg *packages.Package) (rules []bf.Expr, empty []bf.Expr) {
+func (g *Generator) GenerateRules(pkg *packages.Package) (rules []bf.Expr, empty []bf.Expr, err error) {
+	if imp := pkg.ImportPath(g.c); imp == "" {
+		return nil, nil, fmt.Errorf("in directory %q, prefix is empty, so importpath would be empty for rules. Set a prefix with a '# gazelle:prefix' comment or with -go_prefix on the command line.", pkg.Rel)
+	}
+
 	var rs []bf.Expr
 
 	protoLibName, protoRules := g.generateProto(pkg)
@@ -71,7 +68,8 @@ func (g *Generator) GenerateRules(pkg *packages.Package) (rules []bf.Expr, empty
 			rules = append(rules, r)
 		}
 	}
-	return rules, empty
+
+	return rules, empty, nil
 }
 
 func (g *Generator) generateProto(pkg *packages.Package) (string, []bf.Expr) {
@@ -89,13 +87,14 @@ func (g *Generator) generateProto(pkg *packages.Package) (string, []bf.Expr) {
 		if !pkg.Proto.HasProto() {
 			return "", []bf.Expr{emptyRule("filegroup", filegroupName)}
 		}
-		return "", []bf.Expr{
-			newRule("filegroup", []keyvalue{
-				{key: "name", value: filegroupName},
-				{key: "srcs", value: g.sources(pkg.Proto.Sources, pkg.Rel)},
-				{key: "visibility", value: []string{"//visibility:public"}},
-			}),
+		attrs := []keyvalue{
+			{key: "name", value: filegroupName},
+			{key: "srcs", value: pkg.Proto.Sources},
 		}
+		if g.shouldSetVisibility {
+			attrs = append(attrs, keyvalue{"visibility", []string{checkInternalVisibility(pkg.Rel, "//visibility:public")}})
+		}
+		return "", []bf.Expr{newRule("filegroup", attrs)}
 	}
 
 	if !pkg.Proto.HasProto() {
@@ -111,8 +110,10 @@ func (g *Generator) generateProto(pkg *packages.Package) (string, []bf.Expr) {
 	visibility := []string{checkInternalVisibility(pkg.Rel, "//visibility:public")}
 	protoAttrs := []keyvalue{
 		{"name", protoName},
-		{"srcs", g.sources(pkg.Proto.Sources, pkg.Rel)},
-		{"visibility", visibility},
+		{"srcs", pkg.Proto.Sources},
+	}
+	if g.shouldSetVisibility {
+		protoAttrs = append(protoAttrs, keyvalue{"visibility", visibility})
 	}
 	imports := pkg.Proto.Imports
 	imports.Clean()
@@ -124,8 +125,10 @@ func (g *Generator) generateProto(pkg *packages.Package) (string, []bf.Expr) {
 	goProtoAttrs := []keyvalue{
 		{"name", goProtoName},
 		{"proto", ":" + protoName},
-		{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)},
-		{"visibility", visibility},
+		{"importpath", pkg.ImportPath(g.c)},
+	}
+	if g.shouldSetVisibility {
+		goProtoAttrs = append(goProtoAttrs, keyvalue{"visibility", visibility})
 	}
 	if !imports.IsEmpty() {
 		goProtoAttrs = append(goProtoAttrs, keyvalue{config.GazelleImportsKey, imports})
@@ -157,7 +160,7 @@ func (g *Generator) generateBin(pkg *packages.Package, library string) bf.Expr {
 	attrs := g.commonAttrs(pkg.Rel, name, visibility, pkg.Binary)
 	// TODO(jayconrod): don't add importpath if it can be inherited from library.
 	// This is blocked by bazelbuild/bazel#3575.
-	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)})
+	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c)})
 	if library != "" {
 		attrs = append(attrs, keyvalue{"embed", []string{":" + library}})
 	}
@@ -178,7 +181,7 @@ func (g *Generator) generateLib(pkg *packages.Package, goProtoName string) (stri
 	}
 
 	attrs := g.commonAttrs(pkg.Rel, name, visibility, pkg.Library)
-	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)})
+	attrs = append(attrs, keyvalue{"importpath", pkg.ImportPath(g.c)})
 	if goProtoName != "" {
 		attrs = append(attrs, keyvalue{"embed", []string{":" + goProtoName}})
 	}
@@ -218,7 +221,7 @@ func checkInternalVisibility(rel, visibility string) string {
 func (g *Generator) generateTest(pkg *packages.Package, library string, isXTest bool) bf.Expr {
 	name := g.l.TestLabel(pkg.Rel, isXTest).Name
 	target := pkg.Test
-	importpath := pkg.ImportPath(g.c.GoPrefix, g.c.PrefixRoot)
+	importpath := pkg.ImportPath(g.c)
 	if isXTest {
 		target = pkg.XTest
 		importpath += "_test"
@@ -234,11 +237,8 @@ func (g *Generator) generateTest(pkg *packages.Package, library string, isXTest 
 		attrs = append(attrs, keyvalue{"embed", []string{":" + library}})
 	}
 	if pkg.HasTestdata {
-		glob := globvalue{patterns: []string{path.Join(g.buildPkgRel(pkg.Rel), "testdata/**")}}
+		glob := globvalue{patterns: []string{"testdata/**"}}
 		attrs = append(attrs, keyvalue{"data", glob})
-	}
-	if g.c.StructureMode == config.FlatMode {
-		attrs = append(attrs, keyvalue{"rundir", pkg.Rel})
 	}
 	return newRule("go_test", attrs)
 }
@@ -246,7 +246,7 @@ func (g *Generator) generateTest(pkg *packages.Package, library string, isXTest 
 func (g *Generator) commonAttrs(pkgRel, name, visibility string, target packages.GoTarget) []keyvalue {
 	attrs := []keyvalue{{"name", name}}
 	if !target.Sources.IsEmpty() {
-		attrs = append(attrs, keyvalue{"srcs", g.sources(target.Sources, pkgRel)})
+		attrs = append(attrs, keyvalue{"srcs", target.Sources})
 	}
 	if target.Cgo {
 		attrs = append(attrs, keyvalue{"cgo", true})
@@ -266,37 +266,6 @@ func (g *Generator) commonAttrs(pkgRel, name, visibility string, target packages
 		attrs = append(attrs, keyvalue{config.GazelleImportsKey, imports})
 	}
 	return attrs
-}
-
-// sources converts paths in "srcs" which are relative to the Go package
-// directory ("pkgRel") into relative paths to the build file
-// being generated ("g.buildRel").
-func (g *Generator) sources(srcs packages.PlatformStrings, pkgRel string) packages.PlatformStrings {
-	if g.buildRel == pkgRel {
-		return srcs
-	}
-	rel := g.buildPkgRel(pkgRel)
-	srcs, _ = srcs.Map(func(s string) (string, error) {
-		return path.Join(rel, s), nil
-	})
-	return srcs
-}
-
-// buildPkgRel returns the relative slash-separated path from the directory
-// containing the build file (g.buildRel) to the Go package directory (pkgRel).
-// pkgRel must start with g.buildRel.
-func (g *Generator) buildPkgRel(pkgRel string) string {
-	if g.buildRel == pkgRel {
-		return ""
-	}
-	if g.buildRel == "" {
-		return pkgRel
-	}
-	rel := strings.TrimPrefix(pkgRel, g.buildRel+"/")
-	if rel == pkgRel {
-		log.Panicf("relative path to go package %s must start with relative path to Bazel package %s", pkgRel, g.buildRel)
-	}
-	return rel
 }
 
 var (

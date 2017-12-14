@@ -13,7 +13,7 @@ os:
 env:
   # TODO(bazelbuild/continuous-integration#95): re-enable HEAD builds with stable URL
   # - V=HEAD
-  - V=0.7.0
+  - V=0.8.0
 
 before_install:
   - |
@@ -58,7 +58,6 @@ script:
       --local_resources=400,1,1.0 \
       --test_tag_filters=-dev \
       //...
-  - tests/run_non_bazel_tests.bash ci
 
 notifications:
   email: false

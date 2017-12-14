@@ -33,9 +33,7 @@ def _go_repository_tools_impl(ctx):
   # We work this out here because you can't use a toolchain from a repository rule
   # TODO: This is an ugly non sustainable hack, we need to kill repository tools.
 
-  extension = ""
-  if ctx.os.name.startswith('windows'):
-    extension = ".exe"
+  extension = executable_extension(ctx)
   go_tool = ctx.path(Label("@go_sdk//:bin/go{}".format(extension)))
 
   x_tools_commit = "3d92dd60033c312e3ae7cac319c792271cf67e37"
@@ -51,12 +49,6 @@ def _go_repository_tools_impl(ctx):
       type = "zip",
   )
 
-  if "TMP" in ctx.os.environ:
-    tmp = ctx.os.environ["TMP"]
-  else:
-    ctx.file("tmp/ignore", content="") # make a file to force the directory to exist
-    tmp = str(ctx.path("tmp").realpath)
-
   # Build something that looks like a normal GOPATH so go install will work
   ctx.symlink(x_tools_path, "src/golang.org/x/tools")
   ctx.symlink(buildtools_path, "src/github.com/bazelbuild/buildtools")
@@ -64,7 +56,6 @@ def _go_repository_tools_impl(ctx):
   env = {
     'GOROOT': str(go_tool.dirname.dirname),
     'GOPATH': str(ctx.path('')),
-    'TMP': tmp,
   }
 
   # build all the repository tools

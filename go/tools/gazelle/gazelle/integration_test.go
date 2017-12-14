@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/bazelbuild/rules_go/go/tools/gazelle/config"
+	"github.com/bazelbuild/rules_go/go/tools/gazelle/wspace"
 )
 
 type fileSpec struct {
@@ -58,6 +59,16 @@ func createFiles(files []fileSpec) (string, error) {
 		}
 	}
 	return dir, nil
+}
+
+// skipIfWorkspaceVisible skips the test if the WORKSPACE file for the
+// repository is visible. This happens in newer Bazel versions when tests
+// are run without sandboxing, since temp directories may be inside the
+// exec root.
+func skipIfWorkspaceVisible(t *testing.T, dir string) {
+	if parent, err := wspace.Find(dir); err == nil {
+		t.Skipf("WORKSPACE visible in parent %q of tmp %q", parent, dir)
+	}
 }
 
 func checkFiles(t *testing.T, dir string, files []fileSpec) {
@@ -112,6 +123,8 @@ func TestNoRepoRootOrWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer os.RemoveAll(dir)
+	skipIfWorkspaceVisible(t, dir)
 	want := "-repo_root not specified"
 	if err := runGazelle(dir, nil); err == nil {
 		t.Fatalf("got success; want %q", want)
@@ -216,7 +229,7 @@ go_library(
 		t.Fatal(err)
 	}
 
-	if err := runGazelle(dir, []string{"-go_prefix", "example.com/foo", "-experimental_platforms"}); err != nil {
+	if err := runGazelle(dir, []string{"-go_prefix", "example.com/foo"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := ioutil.ReadFile(filepath.Join(dir, "BUILD")); err != nil {
@@ -378,15 +391,32 @@ go_library(
 	}
 }
 
+// TestMultipleDirectories checks that all directories in a repository are
+// indexed but only directories listed on the command line are updated.
 func TestMultipleDirectories(t *testing.T) {
 	files := []fileSpec{
 		{path: "WORKSPACE"},
 		{
+			path: "a/BUILD.bazel",
+			content: `# This file shouldn't be modified.
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["a.go"],
+    importpath = "example.com/foo/x",
+)
+`,
+		}, {
 			path:    "a/a.go",
 			content: "package a",
 		}, {
-			path:    "b/b.go",
-			content: "package b",
+			path: "b/b.go",
+			content: `
+package b
+
+import _ "example.com/foo/x"
+`,
 		},
 	}
 	dir, err := createFiles(files)
@@ -395,16 +425,27 @@ func TestMultipleDirectories(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	args := []string{"-go_prefix", "example.com/foo", "a", "b"}
+	args := []string{"-go_prefix", "example.com/foo", "b"}
 	if err := runGazelle(dir, args); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{"a", "b"} {
-		path := filepath.Join(dir, d, config.DefaultValidBuildFileNames[0])
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("directory %s not visited: %v", d, err)
-		}
-	}
+
+	checkFiles(t, dir, []fileSpec{
+		files[1], // should not change
+		{
+			path: "b/BUILD.bazel",
+			content: `load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["b.go"],
+    importpath = "example.com/foo/b",
+    visibility = ["//visibility:public"],
+    deps = ["//a:go_default_library"],
+)
+`,
+		},
+	})
 }
 
 func TestErrorOutsideWorkspace(t *testing.T) {
@@ -417,6 +458,7 @@ func TestErrorOutsideWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
+	skipIfWorkspaceVisible(t, dir)
 
 	cases := []struct {
 		name, dir, want string
@@ -526,224 +568,6 @@ go_library(
     importpath = "golang.org/x/bar",
     visibility = ["//visibility:public"],
     deps = ["//vendor/golang.org/x/baz:go_default_library"],
-)
-`,
-		},
-	})
-}
-
-func TestFlatExternal(t *testing.T) {
-	files := []fileSpec{
-		{path: "WORKSPACE"},
-		{
-			path: "BUILD.bazel",
-			content: `load("@io_bazel_rules_go//go:def.bzl", "gazelle")
-
-gazelle(
-    name = "gazelle",
-    prefix = "example.com/foo",
-    args = ["-experimental_flat"],
-)
-`,
-		}, {
-			path:    "a.go",
-			content: `package foo`,
-		}, {
-			path:    "b/b.go",
-			content: `package b`,
-		}, {
-			path:    "b/b_test.go",
-			content: `package b`,
-		}, {
-			path: "b/b_x_test.go",
-			content: `package b_test
-
-import _ "example.com/foo/b"
-`,
-		}, {
-			path: "b/testdata/",
-		}, {
-			path:    "b/deep/deep.go",
-			content: `package deep`,
-		}, {
-			path: "c/c.go",
-			content: `package main
-
-import (
-  _ "example.com/foo"
-  _ "example.com/foo/b"
-  _ "example.com/foo/b/deep"
-  _ "golang.org/x/tools/go/ssa"
-)
-`,
-		},
-	}
-	dir, err := createFiles(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	args := []string{"-go_prefix", "example.com/foo", "-experimental_flat"}
-	if err := runGazelle(dir, args); err != nil {
-		t.Fatal(err)
-	}
-
-	checkFiles(t, dir, []fileSpec{
-		{
-			path: config.DefaultValidBuildFileNames[0],
-			content: `load("@io_bazel_rules_go//go:def.bzl", "gazelle", "go_binary", "go_library", "go_test")
-
-gazelle(
-    name = "gazelle",
-    args = ["-experimental_flat"],
-    prefix = "example.com/foo",
-)
-
-go_library(
-    name = "foo",
-    srcs = ["a.go"],
-    importpath = "example.com/foo",
-    visibility = ["//visibility:public"],
-)
-
-go_library(
-    name = "b",
-    srcs = ["b/b.go"],
-    importpath = "example.com/foo/b",
-    visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "b_test",
-    srcs = ["b/b_test.go"],
-    data = glob(["b/testdata/**"]),
-    embed = [":b"],
-    importpath = "example.com/foo/b",
-    rundir = "b",
-)
-
-go_test(
-    name = "b_xtest",
-    srcs = ["b/b_x_test.go"],
-    data = glob(["b/testdata/**"]),
-    importpath = "example.com/foo/b_test",
-    rundir = "b",
-    deps = [":b"],
-)
-
-go_library(
-    name = "b/deep",
-    srcs = ["b/deep/deep.go"],
-    importpath = "example.com/foo/b/deep",
-    visibility = ["//visibility:public"],
-)
-
-go_library(
-    name = "c",
-    srcs = ["c/c.go"],
-    importpath = "example.com/foo/c",
-    visibility = ["//visibility:private"],
-    deps = [
-        ":b",
-        ":b/deep",
-        ":foo",
-        "@org_golang_x_tools//:go/ssa",
-    ],
-)
-
-go_binary(
-    name = "c_cmd",
-    embed = [":c"],
-    importpath = "example.com/foo/c",
-    visibility = ["//visibility:public"],
-)
-`,
-		},
-	})
-}
-
-func TestFlatVendored(t *testing.T) {
-	files := []fileSpec{
-		{path: "WORKSPACE"},
-		{
-			path: "BUILD.bazel",
-			content: `load("@io_bazel_rules_go//go:def.bzl", "gazelle")
-
-gazelle(
-    name = "gazelle",
-    args = ["-experimental_flat"],
-    external = "vendored",
-    prefix = "example.com/foo",
-)
-`,
-		}, {
-			path: "foo.go",
-			content: `package foo
-
-import (
-  _ "github.com/jr_hacker/stuff/a"
-  _ "github.com/jr_hacker/stuff/a/b"
-)
-`,
-		}, {
-			path: "vendor/github.com/jr_hacker/stuff/a/a.go",
-			content: `package a
-
-import _ "github.com/jr_hacker/stuff/a/b"
-`,
-		}, {
-			path:    "vendor/github.com/jr_hacker/stuff/a/b/b.go",
-			content: "package b",
-		},
-	}
-	dir, err := createFiles(files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	args := []string{"-go_prefix", "example.com/foo", "-experimental_flat", "-external", "vendored"}
-	if err := runGazelle(dir, args); err != nil {
-		t.Fatal(err)
-	}
-
-	checkFiles(t, dir, []fileSpec{
-		{
-			path: config.DefaultValidBuildFileNames[0],
-			content: `load("@io_bazel_rules_go//go:def.bzl", "gazelle", "go_library")
-
-gazelle(
-    name = "gazelle",
-    args = ["-experimental_flat"],
-    external = "vendored",
-    prefix = "example.com/foo",
-)
-
-go_library(
-    name = "foo",
-    srcs = ["foo.go"],
-    importpath = "example.com/foo",
-    visibility = ["//visibility:public"],
-    deps = [
-        ":vendor/github.com/jr_hacker/stuff/a",
-        ":vendor/github.com/jr_hacker/stuff/a/b",
-    ],
-)
-
-go_library(
-    name = "vendor/github.com/jr_hacker/stuff/a",
-    srcs = ["vendor/github.com/jr_hacker/stuff/a/a.go"],
-    importpath = "github.com/jr_hacker/stuff/a",
-    visibility = ["//visibility:public"],
-    deps = [":vendor/github.com/jr_hacker/stuff/a/b"],
-)
-
-go_library(
-    name = "vendor/github.com/jr_hacker/stuff/a/b",
-    srcs = ["vendor/github.com/jr_hacker/stuff/a/b/b.go"],
-    importpath = "github.com/jr_hacker/stuff/a/b",
-    visibility = ["//visibility:public"],
 )
 `,
 		},
@@ -1047,6 +871,210 @@ go_library(
 )
 `,
 	}})
+}
+
+// TestResolveKeptImportpath checks that Gazelle can resolve dependencies
+// against a library with a '# keep' comment on its importpath attribute
+// when the importpath doesn't match what Gazelle would infer.
+func TestResolveKeptImportpath(t *testing.T) {
+	files := []fileSpec{
+		{path: "WORKSPACE"},
+		{
+			path: "foo/foo.go",
+			content: `
+package foo
+
+import _ "example.com/alt/baz"
+`,
+		}, {
+			path: "bar/BUILD.bazel",
+			content: `load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["bar.go"],
+    importpath = "example.com/alt/baz",  # keep
+    visibility = ["//visibility:public"],
+)
+`,
+		}, {
+			path:    "bar/bar.go",
+			content: "package bar",
+		},
+	}
+
+	dir, err := createFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	args := []string{"-go_prefix", "example.com/repo"}
+	if err := runGazelle(dir, args); err != nil {
+		t.Fatal(err)
+	}
+
+	checkFiles(t, dir, []fileSpec{
+		{
+			path: "foo/BUILD.bazel",
+			content: `
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["foo.go"],
+    importpath = "example.com/repo/foo",
+    visibility = ["//visibility:public"],
+    deps = ["//bar:go_default_library"],
+)
+`,
+		}, {
+			path: "bar/BUILD.bazel",
+			content: `load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["bar.go"],
+    importpath = "example.com/alt/baz",  # keep
+    visibility = ["//visibility:public"],
+)
+`,
+		},
+	})
+}
+
+// TestResolveVendorSubdirectory checks that Gazelle can resolve libraries
+// in a vendor directory which is not at the repository root.
+func TestResolveVendorSubdirectory(t *testing.T) {
+	files := []fileSpec{
+		{path: "WORKSPACE"},
+		{
+			path:    "sub/vendor/example.com/foo/foo.go",
+			content: "package foo",
+		}, {
+			path: "sub/bar/bar.go",
+			content: `
+package bar
+
+import _ "example.com/foo"
+`,
+		},
+	}
+	dir, err := createFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	args := []string{"-go_prefix", "example.com/repo"}
+	if err := runGazelle(dir, args); err != nil {
+		t.Fatal(err)
+	}
+
+	checkFiles(t, dir, []fileSpec{
+		{
+			path: "sub/vendor/example.com/foo/BUILD.bazel",
+			content: `
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["foo.go"],
+    importpath = "example.com/foo",
+    visibility = ["//visibility:public"],
+)
+`,
+		}, {
+			path: "sub/bar/BUILD.bazel",
+			content: `
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["bar.go"],
+    importpath = "example.com/repo/sub/bar",
+    visibility = ["//visibility:public"],
+    deps = ["//sub/vendor/example.com/foo:go_default_library"],
+)
+`,
+		},
+	})
+}
+
+// TestDeleteProtoWithDeps checks that Gazelle will delete proto rules with
+// dependencies after the proto sources are removed.
+func TestDeleteProtoWithDeps(t *testing.T) {
+	files := []fileSpec{
+		{path: "WORKSPACE"},
+		{
+			path: "foo/BUILD.bazel",
+			content: `
+load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["extra.go"],
+    embed = [":scratch_go_proto"],
+    importpath = "example.com/repo/foo",
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "foo_proto",
+    srcs = ["foo.proto"],
+    visibility = ["//visibility:public"],
+    deps = ["//foo/bar:bar_proto"],
+)
+
+go_proto_library(
+    name = "foo_go_proto",
+    importpath = "example.com/repo/foo",
+    proto = ":foo_proto",
+    visibility = ["//visibility:public"],
+    deps = ["//foo/bar:go_default_library"],
+)
+`,
+		}, {
+			path:    "foo/extra.go",
+			content: "package foo",
+		}, {
+			path: "foo/bar/bar.proto",
+			content: `
+syntax = "proto3";
+
+option go_package = "example.com/repo/foo/bar";
+
+message Bar {};
+`,
+		},
+	}
+	dir, err := createFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	args := []string{"-go_prefix", "example.com/repo"}
+	if err := runGazelle(dir, args); err != nil {
+		t.Fatal(err)
+	}
+
+	checkFiles(t, dir, []fileSpec{
+		{
+			path: "foo/BUILD.bazel",
+			content: `
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "go_default_library",
+    srcs = ["extra.go"],
+    importpath = "example.com/repo/foo",
+    visibility = ["//visibility:public"],
+)
+`,
+		},
+	})
 }
 
 // TODO(jayconrod): more tests

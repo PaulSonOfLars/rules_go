@@ -40,6 +40,9 @@ load("@io_bazel_rules_go//go/private:rules/wrappers.bzl",
     _go_binary_macro = "go_binary_macro",
     _go_test_macro = "go_test_macro",
 )
+load("@io_bazel_rules_go//go/private:rules/source.bzl",
+    _go_source = "go_source",
+)
 load("@io_bazel_rules_go//go/private:tools/embed_data.bzl",
     "go_embed_data",
 )
@@ -52,6 +55,10 @@ load("@io_bazel_rules_go//go/private:tools/path.bzl",
 load("@io_bazel_rules_go//go/private:tools/vet.bzl",
     _go_vet_test = "go_vet_test",
 )
+
+# Current version or next version to be tagged. Gazelle and other tools may
+# check this to determine compatibility.
+RULES_GO_VERSION = "0.8.1"
 
 GoLibrary = _GoLibrary
 """See go/providers.rst#GoLibrary for full documentation."""
@@ -66,6 +73,9 @@ go_binary = _go_binary_macro
 """See go/core.rst#go_binary for full documentation."""
 
 go_test = _go_test_macro
+"""See go/core.rst#go_test for full documentation."""
+
+go_source = _go_source
 """See go/core.rst#go_test for full documentation."""
 
 go_path = _go_path

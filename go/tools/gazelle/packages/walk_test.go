@@ -18,6 +18,7 @@ package packages_test
 import (
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -289,6 +290,40 @@ func TestRootWithoutPrefix(t *testing.T) {
 	}
 }
 
+func TestVendorResetsPrefix(t *testing.T) {
+	files := []fileSpec{
+		{path: "vendor/"},
+		{path: "sub/vendor/"},
+	}
+	dir, err := createFiles(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	basePrefix := "example.com/repo"
+	c := &config.Config{
+		RepoRoot:            dir,
+		Dirs:                []string{dir},
+		ValidBuildFileNames: config.DefaultValidBuildFileNames,
+		GoPrefix:            basePrefix,
+	}
+	packages.Walk(c, c.RepoRoot, func(rel string, c *config.Config, _ *packages.Package, _ *bf.File, _ bool) {
+		if path.Base(rel) != "vendor" {
+			return
+		}
+		if c.GoPrefix != "" {
+			t.Errorf("in %q, GoPrefix not reset", rel)
+		}
+		if c.GoPrefixRel != rel {
+			t.Errorf("in %q, GoPrefixRel not set", rel)
+		}
+	})
+	if c.GoPrefix != basePrefix {
+		t.Errorf("prefix in base configuration was modified: %q", c.GoPrefix)
+	}
+}
+
 func TestTestdata(t *testing.T) {
 	files := []fileSpec{
 		{path: "raw/testdata/"},
@@ -454,11 +489,13 @@ import "github.com/jr_hacker/stuff"
 func TestExcluded(t *testing.T) {
 	files := []fileSpec{
 		{
+			path:    "BUILD",
+			content: "# gazelle:exclude exclude/do.go",
+		}, {
 			path: "exclude/BUILD",
 			content: `
-# gazelle:exclude do.go
-
 # gazelle:exclude not.go
+
 # gazelle:exclude build.go
 
 genrule(
@@ -603,70 +640,6 @@ package proto_only;`,
 		},
 	}
 	checkFiles(t, files, "", want)
-}
-
-func TestVendor(t *testing.T) {
-	files := []fileSpec{
-		{path: "vendor/foo/foo.go", content: "package foo"},
-		{path: "x/vendor/bar/bar.go", content: "package bar"},
-	}
-
-	for _, tc := range []struct {
-		desc string
-		mode config.DependencyMode
-		want []*packages.Package
-	}{
-		{
-			desc: "external mode",
-			mode: config.ExternalMode,
-			want: nil,
-		},
-		{
-			desc: "vendored mode",
-			mode: config.VendorMode,
-			want: []*packages.Package{
-				{
-					Name: "foo",
-					Rel:  "vendor/foo",
-					Library: packages.GoTarget{
-						Sources: packages.PlatformStrings{
-							Generic: []string{"foo.go"},
-						},
-					},
-				},
-				{
-					Name: "bar",
-					Rel:  "x/vendor/bar",
-					Library: packages.GoTarget{
-						Sources: packages.PlatformStrings{
-							Generic: []string{"bar.go"},
-						},
-					},
-				},
-			},
-		},
-	} {
-		t.Run(tc.desc, func(t *testing.T) {
-			dir, err := createFiles(files)
-			if err != nil {
-				os.RemoveAll(dir)
-			}
-
-			for _, p := range tc.want {
-				p.Dir = filepath.Join(dir, filepath.FromSlash(p.Rel))
-			}
-
-			c := &config.Config{
-				RepoRoot:            dir,
-				Dirs:                []string{dir},
-				GoPrefix:            "",
-				ValidBuildFileNames: config.DefaultValidBuildFileNames,
-				DepMode:             tc.mode,
-			}
-			got := walkPackages(c)
-			checkPackages(t, got, tc.want)
-		})
-	}
 }
 
 func TestMalformedBuildFile(t *testing.T) {

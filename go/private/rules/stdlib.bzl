@@ -30,25 +30,41 @@ stdlib(
 """
 
 def _stdlib_impl(ctx):
-  go = ctx.actions.declare_file("bin/go") # TODO: .exe
   src = ctx.actions.declare_directory("src")
   pkg = ctx.actions.declare_directory("pkg")
   root_file = ctx.actions.declare_file("ROOT")
-  files = [root_file, go, pkg]
   goroot = root_file.path[:-(len(root_file.basename)+1)]
   sdk = ""
   for f in ctx.files._host_sdk:
-    prefix, found, _  = f.path.partition("bin/go")
+    prefix, found, extension  = f.path.partition("bin/go")
     if found:
       sdk = prefix
   if not sdk:
     fail("Could not find go executable in go_sdk")
+  go = ctx.actions.declare_file("bin/go" + extension)
+  files = [root_file, go, pkg]
   cpp = ctx.fragments.cpp
   features = ctx.features
-  options = (cpp.compiler_options(features) +
+  compiler_options = cpp.compiler_options(features)
+  linker_options = cpp.mostly_static_link_options(features, False)
+  options = (compiler_options +
       cpp.unfiltered_compiler_options(features) +
       cpp.link_options +
-      cpp.mostly_static_link_options(features, False))
+      linker_options)
+  cleaned_compiler_options = []
+  for s in compiler_options:
+    if s == "-fcolor-diagnostics" or s == "-Wall":
+      continue
+    else:
+      cleaned_compiler_options.append(s)
+  cleaned_linker_options = []
+  for s in linker_options:
+    if s == "-Wl,--gc-sections":
+      continue
+    else:
+      cleaned_linker_options.append(s)
+  compiler_options_string = "\"" + " ".join(cleaned_compiler_options) + "\""
+  linker_options_string= "\"" + " ".join(cleaned_linker_options) + "\""
   linker_path, _ = cpp.ld_executable.rsplit("/", 1)
   ctx.actions.write(root_file, "")
   cc_path = cpp.compiler_executable
@@ -61,7 +77,9 @@ def _stdlib_impl(ctx):
       "CGO_ENABLED": "1" if ctx.attr.cgo else "0",
       "CC": cc_path,
       "CXX": cc_path,
-      "COMPILER_PATH": linker_path
+      "COMPILER_PATH": linker_path,
+      "CGO_CPPFLAGS": compiler_options_string,
+      "CGO_LDFLAGS": linker_options_string,
   }
   inputs = ctx.files._host_sdk + [root_file]
   inputs.extend(ctx.files._host_tools)
@@ -73,6 +91,7 @@ def _stdlib_impl(ctx):
   ctx.actions.run_shell(
       inputs = inputs,
       outputs = [go, src, pkg],
+      mnemonic = "GoStdlib",
       command = " && ".join([
           "export " + " ".join(["{}={}".format(key, value) for key, value in env.items()]),
           "mkdir -p {}".format(src.path),
@@ -94,6 +113,8 @@ def _stdlib_impl(ctx):
           root_file = root_file,
           goos = ctx.attr.goos,
           goarch = ctx.attr.goarch,
+          race = ctx.attr.race,
+          pure = not ctx.attr.cgo,
           libs = [pkg],
           headers = [pkg],
           files = files,

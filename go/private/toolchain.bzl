@@ -30,7 +30,13 @@ go_host_sdk = repository_rule(_go_host_sdk_impl, environ = ["GOROOT"])
 
 def _go_download_sdk_impl(ctx):
   if ctx.os.name == 'linux':
-    host = "linux_amd64"
+    res = ctx.execute(['uname', '-p'])
+    if res.return_code == 0 and res.stdout == 's390x':
+      host = "linux_s390x"
+    else:
+      # uname -p, -i, and -m can return wildly different values on different
+      # distributions and versions. Always default to amd64.
+      host = "linux_amd64"
   elif ctx.os.name == 'mac os x':
     host = "darwin_amd64"
   elif ctx.os.name.startswith('windows'):
@@ -86,13 +92,6 @@ def _go_sdk_impl(ctx):
 
 
 def _prepare(ctx):
-  if "TMP" in ctx.os.environ:
-    tmp = ctx.os.environ["TMP"]
-    ctx.symlink(tmp, "tmp")
-  else:
-    ctx.file("tmp/ignore", content="") # make a file to force the directory to exist
-    tmp = str(ctx.path("tmp").realpath)
-
   # Create a text file with a list of standard packages.
   # OPT: just list directories under src instead of running "go list". No
   # need to read all source files. We need a portable way to run code though.
@@ -132,7 +131,6 @@ def _sdk_build_file(ctx):
   ctx.file("ROOT")
   ctx.template("BUILD.bazel",
       Label("@io_bazel_rules_go//go/private:BUILD.sdk.bazel"),
-      substitutions = {"{extension}": executable_extension(ctx)},
       executable = False,
   )
 

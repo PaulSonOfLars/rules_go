@@ -17,7 +17,6 @@ package packages
 
 import (
 	"fmt"
-	"path"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,75 +24,11 @@ import (
 	"github.com/bazelbuild/rules_go/go/tools/gazelle/config"
 )
 
-func TestImportPath(t *testing.T) {
-	prefix := "example.com/repo"
-	for _, tc := range []struct {
-		name, rel, prefix, want string
-	}{
-		{
-			name: "simple_vendor",
-			rel:  "vendor/foo/bar",
-			want: "foo/bar",
-		}, {
-			name: "empty_vendor",
-			rel:  "vendor",
-			want: "",
-		}, {
-			name: "multi_vendor",
-			rel:  "vendor/foo/vendor/bar",
-			want: "bar",
-		}, {
-			name: "prefix",
-			rel:  "foo/bar",
-			want: "example.com/repo/foo/bar",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			pkg := Package{
-				Name: path.Base(tc.rel),
-				Rel:  tc.rel,
-				Library: GoTarget{
-					Sources: PlatformStrings{
-						Generic: []string{"a.go"},
-					},
-				},
-			}
-			if got := pkg.ImportPath(prefix); got != tc.want {
-				t.Errorf("%s: got %q ; want %q", tc.name, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestImportPathNoLib(t *testing.T) {
-	pkg := Package{
-		Name: "bar",
-		Rel:  "foo/bar",
-	}
-	if got, want := pkg.ImportPath("example.com/repo"), "example.com/repo/foo/bar"; got != want {
-		t.Errorf(`got %q; want %q`, got, want)
-	}
-}
-
-func TestImportPathCmd(t *testing.T) {
-	pkg := Package{
-		Name: "main",
-		Rel:  "foo/bar",
-		Library: GoTarget{
-			Sources: PlatformStrings{
-				Generic: []string{"main.go"},
-			},
-		},
-	}
-	if got, want := pkg.ImportPath("example.com/repo"), "example.com/repo/foo/bar"; got != want {
-		t.Errorf(`got %q; want %q`, got, want)
-	}
-}
-
 func TestAddPlatformStrings(t *testing.T) {
-	c := &config.Config{ExperimentalPlatforms: true}
+	c := &config.Config{}
 	for _, tc := range []struct {
 		desc, filename string
+		tags           []tagLine
 		want           PlatformStrings
 	}{
 		{
@@ -122,10 +57,20 @@ func TestAddPlatformStrings(t *testing.T) {
 					config.Platform{OS: "linux", Arch: "amd64"}: []string{"foo_linux_amd64.go"},
 				},
 			},
+		}, {
+			desc:     "os not arch",
+			filename: "foo.go",
+			tags:     []tagLine{{{"solaris", "!arm"}}},
+			want: PlatformStrings{
+				Platform: map[config.Platform][]string{
+					config.Platform{OS: "solaris", Arch: "amd64"}: []string{"foo.go"},
+				},
+			},
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
 			fi := fileNameInfo("", "", tc.filename)
+			fi.tags = tc.tags
 			var got PlatformStrings
 			got.addStrings(c, fi, nil, tc.filename)
 			if !reflect.DeepEqual(got, tc.want) {

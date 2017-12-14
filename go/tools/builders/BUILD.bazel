@@ -25,6 +25,7 @@ go_tool_binary(
         "asm.go",
         "env.go",
         "filter.go",
+        "flags.go",
     ],
     visibility = ["//visibility:public"],
 )
@@ -69,8 +70,8 @@ go_tool_binary(
 go_tool_binary(
     name = "info",
     srcs = [
-        "info.go",
         "env.go",
+        "info.go",
     ],
     visibility = ["//visibility:public"],
 )
@@ -111,6 +112,15 @@ go_tool_binary(
         "env.go",
         "flags.go",
         "pack.go",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_tool_binary(
+    name = "go-protoc",
+    srcs = [
+        "flags.go",
+        "protoc.go",
     ],
     visibility = ["//visibility:public"],
 )
