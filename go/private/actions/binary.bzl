@@ -12,41 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:mode.bzl",
-    "mode_string",
-    "get_mode",
-)
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "declare_file",
-)
-
-def emit_binary(ctx, go_toolchain,
+def emit_binary(go,
     name="",
-    importpath = "",
     source = None,
     gc_linkopts = [],
-    x_defs = {},
-    wrap = None):
+    linkstamp=None,
+    version_file=None,
+    info_file=None):
   """See go/toolchains.rst#binary for full documentation."""
 
   if name == "": fail("name is a required parameter")
 
-  mode = get_mode(ctx, ctx.attr._go_toolchain_flags)
-  golib, goarchive = go_toolchain.actions.library(ctx,
-      go_toolchain = go_toolchain,
-      mode = mode,
-      source = source,
-      importpath = importpath,
-      importable = False,
-  )
-  executable = declare_file(ctx, name=name, ext=go_toolchain.data.extension, mode=mode)
-  go_toolchain.actions.link(ctx,
-      go_toolchain = go_toolchain,
-      archive=goarchive,
-      mode=mode,
+  archive = go.archive(go, source)
+  executable = go.declare_file(go, name=name, ext=go.exe_extension)
+  go.link(go,
+      archive=archive,
       executable=executable,
       gc_linkopts=gc_linkopts,
-      x_defs=x_defs,
+      linkstamp=linkstamp,
+      version_file=version_file,
+      info_file=info_file,
   )
 
-  return golib, goarchive, executable
+  return archive, executable

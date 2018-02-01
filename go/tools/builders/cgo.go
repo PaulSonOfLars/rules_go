@@ -31,14 +31,12 @@ import (
 
 func run(args []string) error {
 	sources := multiFlag{}
-	cc := ""
 	objdir := ""
 	dynout := ""
 	dynimport := ""
 	flags := flag.NewFlagSet("cgo", flag.ContinueOnError)
 	goenv := envFlags(flags)
 	flags.Var(&sources, "src", "A source file to be filtered and compiled")
-	flags.StringVar(&cc, "cc", "", "Sets the c compiler to use")
 	flags.StringVar(&objdir, "objdir", "", "The output directory")
 	flags.StringVar(&dynout, "dynout", "", "The output directory")
 	flags.StringVar(&dynimport, "dynimport", "", "The output directory")
@@ -46,6 +44,11 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if err := goenv.update(); err != nil {
+		return err
+	}
+	// TODO: work out why setting CGO_LDFLAGS breaks cgo
+	goenv.ld_flags = []string{}
 	env := os.Environ()
 	env = append(env, goenv.Env()...)
 
@@ -88,14 +91,14 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		match, isCgo, pkg, err := matchFile(bctx, in, true)
+		metadata, err := readGoMetadata(bctx, in, true)
 		if err != nil {
 			return err
 		}
 		// if this is not a go file, it cannot be cgo, so just check the filter
 		if !strings.HasSuffix(in, ".go") {
 			// Not a go file, just filter, assume C or C-like
-			if match {
+			if metadata.matched {
 				// not filtered, copy over
 				if err := ioutil.WriteFile(out, data, 0644); err != nil {
 					return err
@@ -112,12 +115,12 @@ func run(args []string) error {
 		// Go source, must produce both c and go outputs
 		cOut := strings.TrimSuffix(out, ".cgo1.go") + ".cgo2.c"
 
-		if !match {
-			if pkg == "" {
+		if !metadata.matched {
+			if metadata.pkg == "" {
 				return fmt.Errorf("%s: error: could not parse package name", in)
 			}
 			// filtered file, fake both the go and the c
-			if err := ioutil.WriteFile(out, []byte("package "+pkg), 0644); err != nil {
+			if err := ioutil.WriteFile(out, []byte("package "+metadata.pkg), 0644); err != nil {
 				return err
 			}
 			if err := ioutil.WriteFile(cOut, []byte(""), 0644); err != nil {
@@ -126,12 +129,12 @@ func run(args []string) error {
 			continue
 		}
 
-		if pkgName != "" && pkg != pkgName {
-			return fmt.Errorf("multiple packages found: %s and %s", pkgName, pkg)
+		if pkgName != "" && metadata.pkg != pkgName {
+			return fmt.Errorf("multiple packages found: %s and %s", pkgName, metadata.pkg)
 		}
-		pkgName = pkg
+		pkgName = metadata.pkg
 
-		if isCgo {
+		if metadata.isCgo {
 			// add to cgo file list
 			cgoSrcs = append(cgoSrcs, in)
 		} else {
@@ -168,13 +171,6 @@ func run(args []string) error {
 		}
 		copts = append(copts, args...)
 	}
-
-	// Add the absoulute path to the c compiler to the environment
-	if abs, err := filepath.Abs(cc); err == nil {
-		cc = abs
-	}
-	env = append(env, fmt.Sprintf("CC=%s", cc))
-	env = append(env, fmt.Sprintf("CXX=%s", cc))
 
 	goargs := []string{"tool", "cgo", "-objdir", objdir}
 	goargs = append(goargs, copts...)

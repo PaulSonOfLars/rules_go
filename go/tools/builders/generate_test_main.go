@@ -165,6 +165,9 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if err := goenv.update(); err != nil {
+		return err
+	}
 	if *pkg == "" {
 		return fmt.Errorf("must set --package.")
 	}
@@ -187,7 +190,7 @@ func run(args []string) error {
 
 	cases := Cases{
 		Package: *pkg,
-		RunDir:  filepath.FromSlash(*runDir),
+		RunDir:  strings.Replace(filepath.FromSlash(*runDir), `\`, `\\`, -1),
 	}
 	covered := map[string]*CoverPackage{}
 	for _, c := range cover {

@@ -12,59 +12,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "go_importpath",
+load(
+    "@io_bazel_rules_go//go/private:context.bzl",
+    "go_context",
 )
-load("@io_bazel_rules_go//go/private:mode.bzl",
-    "get_mode",
-)
-load("@io_bazel_rules_go//go/private:providers.bzl",
+load(
+    "@io_bazel_rules_go//go/private:providers.bzl",
     "GoLibrary",
-    "GoSourceList",
-    "sources",
 )
-load("@io_bazel_rules_go//go/private:rules/prefix.bzl",
+load(
+    "@io_bazel_rules_go//go/private:rules/prefix.bzl",
     "go_prefix_default",
-)
-load("@io_bazel_rules_go//go/private:rules/aspect.bzl",
-    "collect_src",
 )
 
 def _go_library_impl(ctx):
   """Implements the go_library() rule."""
-  go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-  mode = get_mode(ctx, ctx.attr._go_toolchain_flags)
-
-  gosource = collect_src(ctx)
-  golib, goarchive = go_toolchain.actions.library(ctx,
-      go_toolchain = go_toolchain,
-      mode = mode,
-      source = gosource,
-      importpath = go_importpath(ctx),
-      importable = True,
-  )
+  go = go_context(ctx)
+  library = go.new_library(go)
+  source = go.library_to_source(go, ctx.attr, library, ctx.coverage_instrumented())
+  archive = go.archive(go, source)
 
   return [
-      golib, gosource, goarchive,
+      library, source, archive,
       DefaultInfo(
-          files = depset([goarchive.data.file]),
+          files = depset([archive.data.file]),
       ),
       OutputGroupInfo(
-          cgo_exports = goarchive.cgo_exports,
+          cgo_exports = archive.cgo_exports,
       ),
   ]
 
 go_library = rule(
     _go_library_impl,
     attrs = {
-        "data": attr.label_list(allow_files = True, cfg = "data"),
+        "data": attr.label_list(
+            allow_files = True,
+            cfg = "data",
+        ),
         "srcs": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [GoLibrary]),
         "importpath": attr.string(),
-        "embed": attr.label_list(providers = [GoSourceList]),
+        "embed": attr.label_list(providers = [GoLibrary]),
         "gc_goopts": attr.string_list(),
+        "x_defs": attr.string_dict(),
         "_go_prefix": attr.label(default = go_prefix_default),
-        "_go_toolchain_flags": attr.label(default=Label("@io_bazel_rules_go//go/private:go_toolchain_flags")),
+        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
     toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )

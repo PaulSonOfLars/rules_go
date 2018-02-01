@@ -12,99 +12,93 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl",
+load(
+    "@io_bazel_rules_go//go/private:context.bzl",
+    "go_context",
+)
+load(
+    "@io_bazel_rules_go//go/private:common.bzl",
     "split_srcs",
-    "to_set",
     "sets",
 )
-load("@io_bazel_rules_go//go/private:mode.bzl",
-    "get_mode",
+load(
+    "@io_bazel_rules_go//go/private:mode.bzl",
     "mode_string",
 )
-load("@io_bazel_rules_go//go/private:providers.bzl",
+load(
+    "@io_bazel_rules_go//go/private:providers.bzl",
     "GoLibrary",
-    "GoSourceList",
     "GoArchive",
     "GoArchiveData",
-    "sources",
+    "GoSource",
+    "new_aspect_provider",
 )
-load("@io_bazel_rules_go//go/platform:list.bzl",
+load(
+    "@io_bazel_rules_go//go/platform:list.bzl",
     "GOOS",
     "GOARCH",
 )
 
-GoAspectProviders = provider()
-
-def get_archive(dep):
-  if GoAspectProviders in dep:
-    return dep[GoAspectProviders].archive
-  return dep[GoArchive]
-
-def get_source_list(dep):
-  if GoAspectProviders in dep:
-    return dep[GoAspectProviders].source
-  return dep[GoSourceList]
-
-
-def collect_src(ctx, aspect=False, srcs = None, deps=None, want_coverage = None):
-  rule = ctx.rule if aspect else ctx
-  if srcs == None:
-    srcs = rule.files.srcs
-  if deps == None:
-    deps = rule.attr.deps
-  if want_coverage == None:
-    want_coverage = ctx.coverage_instrumented() and not rule.label.name.endswith("~library~")
-  return sources.merge([get_source_list(s) for s in rule.attr.embed] + [sources.new(
-      srcs = srcs,
-      deps = deps,
-      gc_goopts = rule.attr.gc_goopts,
-      runfiles = ctx.runfiles(collect_data = True),
-      want_coverage = want_coverage,
-  )])
-
 def _go_archive_aspect_impl(target, ctx):
-  mode = get_mode(ctx, ctx.rule.attr._go_toolchain_flags)
-  if GoArchive not in target:
-    if GoSourceList in target and hasattr(ctx.rule.attr, "embed"):
-      return [GoAspectProviders(
-        source = collect_src(ctx, aspect=True),
-      )]
-    return []
-  goarchive = target[GoArchive]
-  if goarchive.mode == mode:
-    return [GoAspectProviders(
-        source = target[GoSourceList],
-        archive = goarchive,
-    )]
-
-  source = collect_src(ctx, aspect=True)
-  for dep in ctx.rule.attr.deps:
-    a = get_archive(dep)
-    if a.mode != mode: fail("In aspect on {} found {} is {} expected {}".format(ctx.label, a.data.importpath, mode_string(a.mode), mode_string(mode)))
-
-  go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-  goarchive = go_toolchain.actions.archive(ctx,
-      go_toolchain = go_toolchain,
-      mode = mode,
-      importpath = target[GoLibrary].package.importpath,
+  go = go_context(ctx, ctx.rule.attr)
+  source = target[GoSource] if GoSource in target else None
+  archive = target[GoArchive] if GoArchive in target else None
+  if source and source.mode == go.mode:
+    # The base layer already built the right mode for us
+    return [new_aspect_provider(
       source = source,
-      importable = True,
-  )
-  return [GoAspectProviders(
+      archive = archive,
+    )]
+  if not GoLibrary in target:
+    # Not a rule we can do anything with
+    return []
+  # We have a library and we need to compile it in a new mode
+  library = target[GoLibrary]
+  source = go.library_to_source(go, ctx.rule.attr, library, ctx.coverage_instrumented())
+  if archive:
+    archive = go.archive(go, source = source)
+  return [new_aspect_provider(
     source = source,
-    archive = goarchive,
+    archive = archive,
   )]
 
 go_archive_aspect = aspect(
     _go_archive_aspect_impl,
-    attr_aspects = ["deps", "embed"],
+    attr_aspects = [
+        "deps",
+        "embed",
+        "compiler",
+        "compilers",
+    ],
     attrs = {
-        "pure": attr.string(values=["on", "off", "auto"]),
-        "static": attr.string(values=["on", "off", "auto"]),
-        "msan": attr.string(values=["on", "off", "auto"]),
-        "race": attr.string(values=["on", "off", "auto"]),
-        "goos": attr.string(values=GOOS.keys() + ["auto"], default="auto"),
-        "goarch": attr.string(values=GOARCH.keys() + ["auto"], default="auto"),
+        "pure": attr.string(values = [
+            "on",
+            "off",
+            "auto",
+        ]),
+        "static": attr.string(values = [
+            "on",
+            "off",
+            "auto",
+        ]),
+        "msan": attr.string(values = [
+            "on",
+            "off",
+            "auto",
+        ]),
+        "race": attr.string(values = [
+            "on",
+            "off",
+            "auto",
+        ]),
+        "goos": attr.string(
+            values = GOOS.keys() + ["auto"],
+            default = "auto",
+        ),
+        "goarch": attr.string(
+            values = GOARCH.keys() + ["auto"],
+            default = "auto",
+        ),
     },
     toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )

@@ -12,37 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "declare_file",
-    "sets",
-)
-load("@io_bazel_rules_go//go/private:providers.bzl",
+load(
+    "@io_bazel_rules_go//go:def.bzl",
+    "go_context",
     "GoLibrary",
+)
+load(
+    "@io_bazel_rules_go//go/private:common.bzl",  # TODO: @skylib?
+    "sets",
 )
 
 GoProtoCompiler = provider()
 
-def go_proto_compile(ctx, compiler, proto, imports, importpath):
+def go_proto_compile(go, compiler, proto, imports, importpath):
   go_srcs = []
   outpath = None
   for src in proto.direct_sources:
-    out = declare_file(ctx, path=importpath+"/"+src.basename[:-len(".proto")], ext=compiler.suffix)
+    out = go.declare_file(go, path=importpath+"/"+src.basename[:-len(".proto")], ext=compiler.suffix)
     go_srcs.append(out)
     if outpath == None:
         outpath = out.dirname[:-len(importpath)]
-  args = ctx.actions.args()
+  args = go.actions.args()
   args.add([
       "--protoc", compiler.protoc,
       "--importpath", importpath,
       "--out_path", outpath,
       "--plugin", compiler.plugin,
+      "--compiler_path", go.cgo_tools.compiler_path,
   ])
-  args.add(compiler.options, before_each = "--option")
+  options = compiler.options
+  if compiler.import_path_option:
+    options = options + ["import_path={}".format(importpath)]
+  args.add(options, before_each = "--option")
   args.add(proto.transitive_descriptor_sets, before_each = "--descriptor_set")
   args.add(go_srcs, before_each = "--expected")
   args.add(imports, before_each = "--import")
   args.add(proto.direct_sources, map_fn=_all_proto_paths)
-  ctx.actions.run(
+  go.actions.run(
       inputs = sets.union([
           compiler.go_protoc,
           compiler.protoc,
@@ -57,9 +63,9 @@ def go_proto_compile(ctx, compiler, proto, imports, importpath):
   return go_srcs
 
 def _all_proto_paths(protos):
-  return [_proto_path(proto) for proto in protos]
+  return [proto_path(proto) for proto in protos]
 
-def _proto_path(proto):
+def proto_path(proto):
   """
   The proto path is not really a file path
   It's the path to the proto that was seen when the descriptor file was generated.
@@ -73,17 +79,24 @@ def _proto_path(proto):
   if path.startswith("/"): path = path[1:]
   return path
 
-
 def _go_proto_compiler_impl(ctx):
-  return [GoProtoCompiler(
-      deps = ctx.attr.deps,
-      compile = go_proto_compile,
-      options = ctx.attr.options,
-      suffix = ctx.attr.suffix,
-      go_protoc = ctx.file._go_protoc,
-      protoc = ctx.file._protoc,
-      plugin = ctx.file.plugin,
-  )]
+  go = go_context(ctx)
+  library = go.new_library(go)
+  source = go.library_to_source(go, ctx.attr, library, ctx.coverage_instrumented())
+  return [
+      GoProtoCompiler(
+          deps = ctx.attr.deps,
+          compile = go_proto_compile,
+          options = ctx.attr.options,
+          suffix = ctx.attr.suffix,
+          go_protoc = ctx.file._go_protoc,
+          protoc = ctx.file._protoc,
+          plugin = ctx.file.plugin,
+          valid_archive = ctx.attr.valid_archive,
+          import_path_option = ctx.attr.import_path_option,
+      ),
+      library, source,
+  ]
 
 go_proto_compiler = rule(
     _go_proto_compiler_impl,
@@ -91,6 +104,8 @@ go_proto_compiler = rule(
         "deps": attr.label_list(providers = [GoLibrary]),
         "options": attr.string_list(),
         "suffix": attr.string(default = ".pb.go"),
+        "valid_archive": attr.bool(default = True),
+        "import_path_option": attr.bool(default = True),
         "plugin": attr.label(
             allow_files = True,
             single_file = True,
@@ -98,12 +113,12 @@ go_proto_compiler = rule(
             cfg = "host",
             default = Label("@com_github_golang_protobuf//protoc-gen-go"),
         ),
-        "_go_protoc":  attr.label(
-            allow_files=True,
-            single_file=True,
+        "_go_protoc": attr.label(
+            allow_files = True,
+            single_file = True,
             executable = True,
             cfg = "host",
-            default=Label("@io_bazel_rules_go//go/tools/builders:go-protoc"),
+            default = Label("@io_bazel_rules_go//go/tools/builders:go-protoc"),
         ),
         "_protoc": attr.label(
             allow_files = True,
@@ -112,5 +127,9 @@ go_proto_compiler = rule(
             cfg = "host",
             default = Label("@com_github_google_protobuf//:protoc"),
         ),
-    }
+        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
+    },
+    toolchains = [
+        "@io_bazel_rules_go//go:toolchain",
+    ],
 )

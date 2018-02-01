@@ -12,57 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:actions/action.bzl",
-    "add_go_env",
-)
-load("@io_bazel_rules_go//go/private:providers.bzl",
+load(
+    "@io_bazel_rules_go//go/private:providers.bzl",
     "GoSource",
-    "GoSourceList",
 )
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "declare_file",
+load(
+    "@io_bazel_rules_go//go/private:common.bzl",
     "structs",
 )
 
-def emit_cover(ctx, go_toolchain,
-               source = None,
-               mode = None,
-               importpath = ""):
+def emit_cover(go, source):
   """See go/toolchains.rst#cover for full documentation."""
 
   if source == None: fail("source is a required parameter")
-  if mode == None: fail("mode is a required parameter")
-  if not importpath: fail("importpath is a required parameter")
-
-  stdlib = go_toolchain.stdlib.get(ctx, go_toolchain, mode)
+  if not source.cover:
+    return source, []
 
   covered = []
   cover_vars = []
-  for s in source.entries:
-    if not s.want_coverage:
-      covered.append(s)
+  for src in source.srcs:
+    if not src.basename.endswith(".go") or src not in source.cover:
+      covered.append(src)
       continue
-    outputs = []
-    for src in s.srcs:
-      if not src.basename.endswith(".go"):
-        outputs.append(src)
-        continue
-      cover_var = "Cover_" + src.basename[:-3].replace("-", "_").replace(".", "_")
-      cover_vars.append("{}={}={}".format(cover_var, src.short_path, importpath))
-      out = declare_file(ctx, path=cover_var, ext='.cover.go')
-      outputs.append(out)
-      args = ctx.actions.args()
-      add_go_env(args, stdlib, mode)
-      args.add(["--", "--mode=set", "-var=%s" % cover_var, "-o", out, src])
-      ctx.actions.run(
-          inputs = [src] + stdlib.files,
-          outputs = [out],
-          mnemonic = "GoCover",
-          executable = go_toolchain.tools.cover,
-          arguments = [args],
-      )
-
-    members = structs.to_dict(s)
-    members["srcs"] = outputs
-    covered.append(GoSource(**members))
-  return GoSourceList(entries=covered), cover_vars
+    cover_var = "Cover_" + src.basename[:-3].replace("-", "_").replace(".", "_")
+    cover_vars.append("{}={}={}".format(cover_var, src.short_path, source.library.importpath))
+    out = go.declare_file(go, path=cover_var, ext='.cover.go')
+    covered.append(out)
+    args = go.args(go)
+    args.add(["--", "--mode=set", "-var=%s" % cover_var, "-o", out, src])
+    go.actions.run(
+        inputs = [src] + go.stdlib.files,
+        outputs = [out],
+        mnemonic = "GoCover",
+        executable = go.toolchain.tools.cover,
+        arguments = [args],
+    )
+  members = structs.to_dict(source)
+  members["srcs"] = covered
+  return GoSource(**members), cover_vars

@@ -12,58 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:mode.bzl",
-    "get_mode",
-)
-load("@io_bazel_rules_go//go/private:actions/action.bzl",
-    "add_go_env",
-)
-load("@io_bazel_rules_go//go/private:common.bzl",
-    "declare_file",
+load(
+    "@io_bazel_rules_go//go/private:context.bzl",
+    "go_context",
 )
 
-def _go_info_script_impl(ctx):
-  go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-  mode = get_mode(ctx, ctx.attr._go_toolchain_flags)
-  stdlib = go_toolchain.stdlib.get(ctx, go_toolchain, mode)
-  out = declare_file(ctx, ext=".bash")
-  args = ctx.actions.args()
-  add_go_env(args, stdlib, mode)
-  args.add(["-script", "-out", out])
-  ctx.actions.run(
-      inputs = [],
-      outputs = [out],
+def _go_info_impl(ctx):
+  go = go_context(ctx)
+  report = go.declare_file(go, "go_info_report")
+  args = go.args(go)
+  args.add(["-out", report])
+  go.actions.run(
+      inputs = go.stdlib.files,
+      outputs = [report],
       mnemonic = "GoInfo",
       executable = ctx.executable._go_info,
       arguments = [args],
   )
-  return [
-      DefaultInfo(
-          files = depset([out]),
-      ),
-  ]
+  return [DefaultInfo(
+      files=depset([report]),
+      runfiles=ctx.runfiles([report]),
+  )]
 
-_go_info_script = rule(
-    _go_info_script_impl,
+_go_info = rule(
+    _go_info_impl,
     attrs = {
         "_go_info": attr.label(
-            allow_files = True,
             single_file = True,
             executable = True,
             cfg = "host",
-            default="@io_bazel_rules_go//go/tools/builders:info"),
-        "_go_toolchain_flags": attr.label(default=Label("@io_bazel_rules_go//go/private:go_toolchain_flags")),
+            default = "@io_bazel_rules_go//go/tools/builders:info",
+        ),
+        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
     toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
 def go_info():
-  _go_info_script(
-      name = "go_info_script",
-      tags = ["manual"],
-  )
-  native.sh_binary(
+  _go_info(
       name = "go_info",
-      srcs = ["go_info_script"],
-      tags = ["manual"],
+      visibility = ["//visibility:public"],
   )

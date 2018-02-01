@@ -12,8 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:providers.bzl",
+load(
+    "@io_bazel_rules_go//go/private:providers.bzl",
     "GoStdLib",
+)
+load(
+    "@io_bazel_rules_go//go/private:common.bzl",
+    "paths",
+)
+load("@io_bazel_rules_go//go/private:context.bzl",
+    "go_context",
 )
 
 _STDLIB_BUILD = """
@@ -30,59 +38,30 @@ stdlib(
 """
 
 def _stdlib_impl(ctx):
+  go = go_context(ctx)
   src = ctx.actions.declare_directory("src")
   pkg = ctx.actions.declare_directory("pkg")
   root_file = ctx.actions.declare_file("ROOT")
   goroot = root_file.path[:-(len(root_file.basename)+1)]
-  sdk = ""
-  for f in ctx.files._host_sdk:
-    prefix, found, extension  = f.path.partition("bin/go")
-    if found:
-      sdk = prefix
-  if not sdk:
-    fail("Could not find go executable in go_sdk")
-  go = ctx.actions.declare_file("bin/go" + extension)
-  files = [root_file, go, pkg]
-  cpp = ctx.fragments.cpp
-  features = ctx.features
-  compiler_options = cpp.compiler_options(features)
-  linker_options = cpp.mostly_static_link_options(features, False)
-  options = (compiler_options +
-      cpp.unfiltered_compiler_options(features) +
-      cpp.link_options +
-      linker_options)
-  cleaned_compiler_options = []
-  for s in compiler_options:
-    if s == "-fcolor-diagnostics" or s == "-Wall":
-      continue
-    else:
-      cleaned_compiler_options.append(s)
-  cleaned_linker_options = []
-  for s in linker_options:
-    if s == "-Wl,--gc-sections":
-      continue
-    else:
-      cleaned_linker_options.append(s)
-  compiler_options_string = "\"" + " ".join(cleaned_compiler_options) + "\""
-  linker_options_string= "\"" + " ".join(cleaned_linker_options) + "\""
-  linker_path, _ = cpp.ld_executable.rsplit("/", 1)
+  files = [root_file, go.go, pkg]
   ctx.actions.write(root_file, "")
-  cc_path = cpp.compiler_executable
-  if not cpp.compiler_executable.startswith("/"):
+  cc_path = go.cgo_tools.compiler_executable
+  if not paths.is_absolute(cc_path):
     cc_path = "$(pwd)/" + cc_path
+  cgo = ctx.attr.cgo
   env = {
       "GOROOT": "$(pwd)/{}".format(goroot),
+      "GOROOT_FINAL": "GOROOT",
       "GOOS": ctx.attr.goos,
       "GOARCH": ctx.attr.goarch,
-      "CGO_ENABLED": "1" if ctx.attr.cgo else "0",
+      "CGO_ENABLED": "1" if cgo else "0",
       "CC": cc_path,
       "CXX": cc_path,
-      "COMPILER_PATH": linker_path,
-      "CGO_CPPFLAGS": compiler_options_string,
-      "CGO_LDFLAGS": linker_options_string,
+      "COMPILER_PATH": go.cgo_tools.compiler_path,
+      "CGO_CPPFLAGS": " ".join(go.cgo_tools.compiler_options),
+      "CGO_LDFLAGS": " ".join(go.cgo_tools.linker_options),
   }
-  inputs = ctx.files._host_sdk + [root_file]
-  inputs.extend(ctx.files._host_tools)
+  inputs = go.sdk_files + go.sdk_tools + [root_file]
   install_args = []
   if ctx.attr.race:
     install_args.append("-race")
@@ -90,26 +69,25 @@ def _stdlib_impl(ctx):
 
   ctx.actions.run_shell(
       inputs = inputs,
-      outputs = [go, src, pkg],
+      outputs = [src, pkg],
       mnemonic = "GoStdlib",
       command = " && ".join([
-          "export " + " ".join(["{}={}".format(key, value) for key, value in env.items()]),
+          "export " + " ".join(['{}="{}"'.format(key, value) for key, value in env.items()]),
+          "export PATH=$PATH:$(cd \"$COMPILER_PATH\" && pwd)",
           "mkdir -p {}".format(src.path),
           "mkdir -p {}".format(pkg.path),
-          "cp {}/bin/{} {}".format(sdk, go.basename, go.path),
-          "cp -rf {}/src/* {}/".format(sdk, src.path),
-          "cp -rf {}/pkg/tool {}/".format(sdk, pkg.path),
-          "cp -rf {}/pkg/include {}/".format(sdk, pkg.path),
-          "{} install {} std".format(go.path, install_args),
-          "{} install {} runtime/cgo".format(go.path, install_args),
-      ])
+          "cp -rf {}/src/* {}/".format(go.root, src.path),
+          "cp -rf {}/pkg/tool {}/".format(go.root, pkg.path),
+          "cp -rf {}/pkg/include {}/".format(go.root, pkg.path),
+          "{} install -asmflags \"-trimpath $(pwd)\" {} std".format(go.go.path, install_args),
+          "{} install -asmflags \"-trimpath $(pwd)\" {} runtime/cgo".format(go.go.path, install_args),
+         ])
   )
   return [
       DefaultInfo(
-          files = depset([root_file, go, src, pkg]),
+          files = depset([root_file, go.go, src, pkg]),
       ),
       GoStdLib(
-          go = go,
           root_file = root_file,
           goos = ctx.attr.goos,
           goarch = ctx.attr.goarch,
@@ -118,12 +96,6 @@ def _stdlib_impl(ctx):
           libs = [pkg],
           headers = [pkg],
           files = files,
-          cgo_tools = struct(
-              compiler_executable = cpp.compiler_executable,
-              ld_executable = cpp.ld_executable,
-              options = options,
-              c_options = cpp.c_options,
-          ),
       ),
   ]
 
@@ -134,9 +106,9 @@ stdlib = rule(
         "goarch": attr.string(mandatory = True),
         "race": attr.bool(mandatory = True),
         "cgo": attr.bool(mandatory = True),
-        "_host_sdk": attr.label(allow_files = True, default="@go_sdk//:host_sdk"),
-        "_host_tools": attr.label(allow_files = True, cfg="host", default="@go_sdk//:host_tools"),
+        "_go_context_data": attr.label(default=Label("@io_bazel_rules_go//:go_bootstrap_context_data")),
     },
+    toolchains = ["@io_bazel_rules_go//go:bootstrap_toolchain"],
     fragments = ["cpp"],
 )
 

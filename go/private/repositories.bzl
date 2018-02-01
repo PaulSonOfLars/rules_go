@@ -14,14 +14,18 @@
 
 # Once nested repositories work, this file should cease to exist.
 
+load("@io_bazel_rules_go//go/private:common.bzl", "check_version", "MINIMUM_BAZEL_VERSION")
 load("@io_bazel_rules_go//go/private:repository_tools.bzl", "go_repository_tools")
 load("@io_bazel_rules_go//go/private:go_repository.bzl", "go_repository")
-load('@io_bazel_rules_go//go/private:rules/stdlib.bzl', "go_stdlib")
-load('@io_bazel_rules_go//go/toolchain:toolchains.bzl', "go_register_toolchains")
+load("@io_bazel_rules_go//go/private:rules/stdlib.bzl", "go_stdlib")
+load("@io_bazel_rules_go//go/toolchain:toolchains.bzl", "go_register_toolchains")
 load("@io_bazel_rules_go//go/platform:list.bzl", "GOOS_GOARCH")
+load("@io_bazel_rules_go//proto:gogo.bzl", "gogo_special_proto")
 
 def go_rules_dependencies():
   """See /go/workspace.rst#go-rules-dependencies for full documentation."""
+
+  check_version(MINIMUM_BAZEL_VERSION)
 
   # Needed for gazelle and wtool
   _maybe(native.http_archive,
@@ -30,6 +34,15 @@ def go_rules_dependencies():
       url = "https://codeload.github.com/bazelbuild/buildtools/zip/799e530642bac55de7e76728fa0c3161484899f6",
       strip_prefix = "buildtools-799e530642bac55de7e76728fa0c3161484899f6",
       type = "zip",
+  )
+
+  # New location of Gazelle. Needed by go_repository.
+  # TODO(jayconrod): delete this dependency after we've deleted go_repository
+  # or moved it into bazel_gazelle.
+  _maybe(native.http_archive,
+      name = "bazel_gazelle",
+      url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.8/bazel-gazelle-0.8.tar.gz",
+      sha256 = "e3dadf036c769d1f40603b86ae1f0f90d11837116022d9b06e4cd88cae786676",
   )
 
   # Needed for fetch repo
@@ -76,7 +89,7 @@ def go_rules_dependencies():
       name = "io_bazel_rules_go_repository_tools",
   )
 
-  # Proto dependancies
+  # Proto dependencies
   _maybe(go_repository,
       name = "com_github_golang_protobuf",
       importpath = "github.com/golang/protobuf",
@@ -84,10 +97,27 @@ def go_rules_dependencies():
   )
   _maybe(native.http_archive,
       name = "com_google_protobuf",
-      # v3.5.0, latest as of 2017-11-24
-      url = "https://codeload.github.com/google/protobuf/zip/2761122b810fe8861004ae785cc3ab39f384d342",
-      strip_prefix = "protobuf-2761122b810fe8861004ae785cc3ab39f384d342",
+      # v3.5.1, latest as of 2018-01-11
+      url = "https://codeload.github.com/google/protobuf/zip/106ffc04be1abf3ff3399f54ccf149815b287dd9",
+      strip_prefix = "protobuf-106ffc04be1abf3ff3399f54ccf149815b287dd9",
       type = "zip",
+  )
+  _maybe(go_repository,
+      name = "com_github_mwitkow_go_proto_validators",
+      importpath = "github.com/mwitkow/go-proto-validators",
+      commit = "a55ca57f374a8846924b030f534d8b8211508cf0",  # master, as of 2017-11-24
+      build_file_proto_mode="disable",
+  )
+  _maybe(go_repository,
+      name = "com_github_gogo_protobuf",
+      importpath = "github.com/gogo/protobuf",
+      urls = ["https://codeload.github.com/ianthehat/protobuf/zip/41168f6614b7bb144818ec8967b8c702705df564"],
+      strip_prefix = "protobuf-41168f6614b7bb144818ec8967b8c702705df564",
+      type = "zip",
+      build_file_proto_mode="legacy",
+  )
+  _maybe(gogo_special_proto,
+      name = "gogo_special_proto",
   )
 
   # Only used by deprecated go_proto_library implementation
@@ -97,7 +127,7 @@ def go_rules_dependencies():
       strip_prefix = "protobuf-3.4.0",
   )
 
-  # GRPC dependancies
+  # GRPC dependencies
   _maybe(go_repository,
       name = "org_golang_x_net",
       commit = "a04bdaca5b32abe1c069418fb7088ae607de5bd0",  # master as of 2017-10-10
@@ -131,7 +161,6 @@ def go_rules_dependencies():
       importpath = "github.com/jteeuwen/go-bindata",
       commit = "a0ff2567cfb70903282db057e799fd826784d41d",
   )
-
 
 def _maybe(repo_rule, name, **kwargs):
   if name not in native.existing_rules():

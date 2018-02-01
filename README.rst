@@ -7,18 +7,23 @@ Go rules for Bazel_
   :target: https://travis-ci.org/bazelbuild/rules_go
 .. |jenkins| image:: http://ci.bazel.io/buildStatus/icon?job=PR/rules_go
   :target: http://ci.bazel.io/view/Bazel%20bootstrap%20and%20maintenance/job/PR/job/rules_go/
-.. _gazelle: go/tools/gazelle/README.rst
+.. _gazelle: https://github.com/bazelbuild/bazel-gazelle
+.. _github.com/bazelbuild/bazel-gazelle: https://github.com/bazelbuild/bazel-gazelle
 .. _vendoring: Vendoring.md
 .. _protocol buffers: proto/core.rst
 .. _go_repository: go/workspace.rst#go_repository
 .. _go_library: go/core.rst#go_library
 .. _go_binary: go/core.rst#go_binary
 .. _go_test: go/core.rst#go_test
+.. _go_download_sdk: go/toolchains.rst#go_download_sdk
+.. _go_register_toolchains: go/toolchains.rst#go_register_toolchains
 .. _bazel-go-discuss: https://groups.google.com/forum/#!forum/bazel-go-discuss
 .. _Bazel labels: https://docs.bazel.build/versions/master/build-ref.html#labels
 .. _#265: https://github.com/bazelbuild/rules_go/issues/265
 .. _#721: https://github.com/bazelbuild/rules_go/issues/721
 .. _#889: https://github.com/bazelbuild/rules_go/issues/889
+.. _#1199: https://github.com/bazelbuild/rules_go/issues/1199
+.. _reproducible_binary: tests/reproducible_binary/BUILD.bazel
 .. _Running Bazel Tests on Travis CI: https://kev.inburke.com/kevin/bazel-tests-on-travis-ci/
 .. _korfuri/bazel-travis Use Bazel with Travis CI: https://github.com/korfuri/bazel-travis
 .. _Travis configuration file: .travis.yml
@@ -34,14 +39,19 @@ Travis   Jenkins
 Announcements
 -------------
 
+January 2, 2017
+  The old Gazelle subtree (//go/tools/gazelle) will be removed soon. See
+  `#1199`_ for details. Please migrate to
+  `github.com/bazelbuild/bazel-gazelle`_.
+December 14, 2017
+  Gazelle has moved to a new repository,
+  `github.com/bazelbuild/bazel-gazelle`_. Please try it out and let us know
+  what you think.
+December 13, 2017
+  Release `0.8.1 <https://github.com/bazelbuild/rules_go/releases/tag/0.8.1>`_
+  is now available.
 December 6, 2017
   Release `0.8.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.8.0>`_
-  is now available.
-November 27, 2017
-  Release `0.7.1 <https://github.com/bazelbuild/rules_go/releases/tag/0.7.1>`_
-  is now available.
-November 3, 2017
-  Release `0.7.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.7.0>`_
   is now available.
 
 .. contents::
@@ -82,7 +92,7 @@ They currently do not support (in order of importance):
 * coverage
 * test sharding
 
-:Note: The latest version of these rules (0.8.0) requires Bazel ≥ 0.8.0 to work.
+:Note: The latest version of these rules (0.8.1) requires Bazel ≥ 0.8.0 to work.
 
 The ``master`` branch is only guaranteed to work with the latest version of Bazel.
 
@@ -90,7 +100,7 @@ The ``master`` branch is only guaranteed to work with the latest version of Baze
 Setup
 -----
 
-* Create a file at the top of your repository named `WORKSPACE` and add one
+* Create a file at the top of your repository named WORKSPACE and add one
   of the snippets below, verbatim. This will let Bazel fetch necessary
   dependencies from this repository and a few others.
 
@@ -100,8 +110,8 @@ Setup
 
     http_archive(
         name = "io_bazel_rules_go",
-        url = "https://github.com/bazelbuild/rules_go/releases/download/0.8.0/rules_go-0.8.0.tar.gz",
-        sha256 = "8eaf2e62811169d9cf511209153effcb132826cea708b2f75d4dd5f9e57ea2aa",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.8.1/rules_go-0.8.1.tar.gz",
+        sha256 = "90bb270d0a92ed5c83558b2797346917c46547f6f7103e648941ecdb6b9d0e72",
     )
     load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
     go_rules_dependencies()
@@ -121,14 +131,6 @@ Setup
     go_rules_dependencies()
     go_register_toolchains()
 
-  If you plan to use the proto rules (``go_proto_library`` and
-  ``go_grpc_library``), add the following to WORKSPACE.
-
-  .. code:: bzl
-
-    load("@io_bazel_rules_go//proto:def.bzl", "proto_register_toolchains")
-    proto_register_toolchains()
-
   You can add more external dependencies to this file later (see go_repository_).
 
 * Add a file named ``BUILD.bazel`` in the root directory of your
@@ -145,23 +147,33 @@ Generating build files
 ~~~~~~~~~~~~~~~~~~~~~~
 
 If your project can be built with ``go build``, you can generate and update your
-build files automatically using gazelle_, a tool included in this repository.
+build files automatically using gazelle_.
 
-* Add the code below to the ``BUILD.bazel`` file in your repository's
-  root directory. Replace the ``prefix`` string with the prefix you chose for
-  your project earlier.
+* Add the code below to your WORKSPACE file *after* ``io_bazel_rules_go`` and
+  its dependencies are loaded.
 
-  .. code:: bzl
+.. code:: bzl
 
-    load("@io_bazel_rules_go//go:def.bzl", "gazelle")
-
-    gazelle(
-        name = "gazelle",
-        prefix = "github.com/example/project",
+    http_archive(
+        name = "bazel_gazelle",
+        url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.8/bazel-gazelle-0.8.tar.gz",
+        sha256 = "e3dadf036c769d1f40603b86ae1f0f90d11837116022d9b06e4cd88cae786676",
     )
+    load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
+    gazelle_dependencies()
 
-* If your project uses vendoring, add ``external = "vendored",`` below the
-  ``prefix`` line.
+* Add the code below to the BUILD or BUILD.bazel file in the root directory
+  of your repository. Replace the string in ``prefix`` with the prefix you
+  chose for your project earlier.
+
+.. code:: bzl
+
+  load("@bazel_gazelle//:def.bzl", "gazelle")
+
+  gazelle(
+      name = "gazelle",
+      prefix = "github.com/example/project",
+  )
 
 * After adding the ``gazelle`` rule, run the command below:
 
@@ -219,7 +231,7 @@ gazelle_, you can write build files by hand.
         name = "go_default_test",
         srcs = ["foo_test.go"],
         importpath = "github.com/example/project/foo",
-        library = ":go_default_library",
+        embed = [":go_default_library"],
     )
 
     # External test
@@ -306,6 +318,38 @@ Gazelle will automatically add a ``data`` attribute like the one above if you
 have a ``testdata`` directory *unless* it contains buildable .go files or
 build files, in which case, ``testdata`` is treated as a normal package.
 
+How do I access ``go_binary`` executables from ``go_test``?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The location where ``go_binary`` writes its executable file is not stable across
+rules_go versions and should not be depended upon. The parent directory includes
+some configuration data in its name. This prevents Bazel's cache from being
+poisoned when the same binary is built in different configurations. The binary
+basename may also be platform-dependent: on Windows, we add an .exe extension.
+
+To depend on an executable in a ``go_test`` rule, reference the executable
+in the ``data`` attribute (to make it visible), then expand the location
+in ``args``. The real location will be passed to the test on the command line.
+For example:
+
+.. code:: bzl
+
+  go_binary(
+      name = "cmd",
+      srcs = ["cmd.go"],
+      importpath = "example.com/cmd",
+  )
+
+  go_test(
+      name = "cmd_test",
+      srcs = ["cmd_test.go"],
+      args = ["$(location :cmd)"],
+      data = [":cmd"],
+      importpath = "example.com/test",
+  )
+
+See `reproducible_binary`_ for a complete example.
+
 How do I run Bazel on Travis CI?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -346,9 +390,41 @@ contended), so you'll want to minimize the amount of network I/O in
 your build. Downloading Bazel and a Go SDK is a huge part of that. To
 avoid downloading a Go SDK, you may request a container with a
 preinstalled version of Go in your ``.travis.yml`` file, then call
-``go_rules_dependencies(go_version = "host")`` in a Travis-specific
+``go_register_toolchains(go_version = "host")`` in a Travis-specific
 ``WORKSPACE`` file.
 
 You may be tempted to put Bazel's cache in your Travis cache. Although this
 can speed up your build significantly, Travis stores its cache on Amazon, and
 it takes a very long time to transfer. Clean builds seem faster in practice.
+
+How do I test a beta version of the Go SDK?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+rules_go only supports official releases of the Go SDK. However, we do have
+an easy way for developers to try out beta releases.
+
+In your WORKSPACE file, add a call `go_download_sdk`_ like the one below. This
+must be named ``go_sdk``, and it must come *before* the call to
+`go_register_toolchains`_.
+
+.. code:: bzl
+
+  load("@io_bazel_rules_go//go:def.bzl",
+      "go_download_sdk",
+      "go_register_toolchains",
+      "go_rules_dependencies",
+  )
+
+  go_rules_dependencies()
+
+  go_download_sdk(
+      name = "go_sdk",
+      sdks = {
+          "darwin_amd64": ("go1.10beta1.darwin-amd64.tar.gz", "8c2a4743359f4b14bcfaf27f12567e3cbfafc809ed5825a2238c0ba45db3a8b4"),
+          "linux_amd64":  ("go1.10beta1.linux-amd64.tar.gz", "ec7a10b5bf147a8e06cf64e27384ff3c6d065c74ebd8fdd31f572714f74a1055"),
+      },
+  )
+
+  go_register_toolchains()
+
+  

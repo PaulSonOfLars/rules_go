@@ -34,6 +34,9 @@ func run(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if err := goenv.update(); err != nil {
+		return err
+	}
 	if len(flags.Args()) < 1 {
 		return fmt.Errorf("Missing source file to asm")
 	}
@@ -42,11 +45,11 @@ func run(args []string) error {
 
 	// filter our input file list
 	bctx := goenv.BuildContext()
-	matched, _, _, err := matchFile(bctx, source, false)
+	metadata, err := readGoMetadata(bctx, source, false)
 	if err != nil {
 		return err
 	}
-	if !matched {
+	if !metadata.matched {
 		source = os.DevNull
 	}
 	goargs := []string{"tool", "asm"}

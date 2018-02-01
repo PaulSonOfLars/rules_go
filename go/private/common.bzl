@@ -20,9 +20,6 @@ load("//go/private:skylib/lib/shell.bzl", "shell")
 load("//go/private:skylib/lib/structs.bzl", "structs")
 load("@io_bazel_rules_go//go/private:mode.bzl", "mode_string")
 
-DEFAULT_LIB = "go_default_library"
-VENDOR_PREFIX = "/vendor/"
-
 go_exts = [
     ".go",
 ]
@@ -54,7 +51,12 @@ c_exts = [
 ]
 
 go_filetype = FileType(go_exts + asm_exts)
+
 cc_hdr_filetype = FileType(hdr_exts)
+
+auto_importpath = "~auto~"
+
+test_library_suffix = "~library~"
 
 # Extensions of files we can build with the Go compiler or with cc_library.
 # This is a subset of the extensions recognized by go/build.
@@ -76,7 +78,7 @@ def split_srcs(srcs):
   headers = []
   asm = []
   c = []
-  for src in srcs:
+  for src in as_iterable(srcs):
     if any([src.basename.endswith(ext) for ext in go_exts]):
       go.append(src)
     elif any([src.basename.endswith(ext) for ext in hdr_exts]):
@@ -97,32 +99,6 @@ def split_srcs(srcs):
 def join_srcs(source):
   return source.go + source.headers + source.asm + source.c
 
-
-def go_importpath(ctx):
-  """Returns the expected importpath of the go_library being built.
-
-  Args:
-    ctx: The skylark Context
-
-  Returns:
-    Go importpath of the library
-  """
-  path = ctx.attr.importpath
-  if path != "":
-    return path
-  path = ctx.attr._go_prefix.go_prefix
-  if path.endswith("/"):
-    path = path[:-1]
-  if ctx.label.package:
-    path += "/" + ctx.label.package
-  if ctx.label.name != DEFAULT_LIB and not path.endswith(ctx.label.name):
-    path += "/" + ctx.label.name
-  if path.rfind(VENDOR_PREFIX) != -1:
-    path = path[len(VENDOR_PREFIX) + path.rfind(VENDOR_PREFIX):]
-  if path[0] == "/":
-    path = path[1:]
-  return path
-
 def env_execute(ctx, arguments, environment = {}, **kwargs):
   """env_executes a command in a repository context. It prepends "env -i"
   to "arguments" before calling "ctx.execute".
@@ -131,6 +107,8 @@ def env_execute(ctx, arguments, environment = {}, **kwargs):
   are removed from the environment. This should be preferred to "ctx.execut"e
   in most situations.
   """
+  if ctx.os.name.startswith('windows'):
+    return ctx.execute(arguments, environment=environment, **kwargs)
   env_args = ["env", "-i"]
   environment = dict(environment)
   for var in ["TMP", "TMPDIR"]:
@@ -138,20 +116,85 @@ def env_execute(ctx, arguments, environment = {}, **kwargs):
       environment[var] = ctx.os.environ[var]
   for k, v in environment.items():
     env_args.append("%s=%s" % (k, v))
-  return ctx.execute(env_args + arguments, **kwargs)
+  arguments = env_args + arguments
+  return ctx.execute(arguments, **kwargs)
 
-def to_set(v):
+def executable_extension(ctx):
+  extension = ""
+  if ctx.os.name.startswith('windows'):
+    extension = ".exe"
+  return extension
+
+def goos_to_extension(goos):
+  if goos == "windows":
+    return ".exe"
+  return ""
+
+MINIMUM_BAZEL_VERSION = "0.8.0"
+
+# _parse_bazel_version and check_version originally copied from
+# github.com/tensorflow/tensorflow/blob/cfd0d3f2aa24b3078d2e79ad0a212c7c53916de9/tensorflow/workspace.bzl
+
+# Parse the bazel version string from `native.bazel_version`.
+# For example, "0.10.0-rc1 0123abc"
+def _parse_bazel_version(bazel_version):
+  # Find the first character that is not a digit or '.' and break there.
+  for i in range(len(bazel_version)):
+    c = bazel_version[i]
+    if not (c.isdigit() or c == "."):
+      bazel_version = bazel_version[:i]
+      break
+  # Split on '.' and convert the pieces to integers.
+  return tuple([int(n) for n in bazel_version.split(".")])
+
+# Check that a specific bazel version is being used.
+def check_version(bazel_version):
+  if "bazel_version" not in dir(native):
+    fail("\nCurrent Bazel version is lower than 0.2.1, expected at least %s\n" %
+         bazel_version)
+  elif not native.bazel_version:
+    print("\nCurrent Bazel is not a release version, cannot check for " +
+          "compatibility.")
+    print("Make sure that you are running at least Bazel %s.\n" % bazel_version)
+  else:
+    current_bazel_version = _parse_bazel_version(native.bazel_version)
+    minimum_bazel_version = _parse_bazel_version(bazel_version)
+    if minimum_bazel_version > current_bazel_version:
+      fail("\nCurrent Bazel version is {}, expected at least {}\n".format(
+          native.bazel_version, bazel_version))
+
+def as_list(v):
+  if type(v) == "list":
+    return v
+  if type(v) == "tuple":
+    return list(v)
   if type(v) == "depset":
-    fail("Do not pass a depset to to_set")
-  return depset(v)
+    return v.to_list()
+  fail("as_list failed on {}".format(v))
 
-def declare_file(ctx, path="", ext="", mode=None, name = ""):
-  filename = ""
-  if mode:
-    filename += mode_string(mode) + "/"
-  filename += name if name else ctx.label.name
-  if path:
-    filename += "~/" + path
-  if ext:
-    filename += ext
-  return ctx.actions.declare_file(filename)
+def as_iterable(v):
+  if type(v) == "list":
+    return v
+  if type(v) == "tuple":
+    return v
+  if type(v) == "depset":
+    return v.to_list()
+  fail("as_iterator failed on {}".format(v))
+
+def as_tuple(v):
+  if type(v) == "tuple":
+    return v
+  if type(v) == "list":
+    return tuple(v)
+  if type(v) == "depset":
+    return tuple(v.to_list())
+  fail("as_tuple failed on {}".format(v))
+
+def as_set(v):
+  if type(v) == "depset":
+    return v
+  if type(v) == "list":
+    return depset(v)
+  if type(v) == "tuple":
+    return depset(v)
+  fail("as_tuple failed on {}".format(v))

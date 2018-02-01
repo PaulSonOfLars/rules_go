@@ -1,5 +1,11 @@
-load("@io_bazel_rules_go//go/private:go_repository.bzl", "env_execute")
-load("@io_bazel_rules_go//go/private:common.bzl", "declare_file")
+load(
+    "@io_bazel_rules_go//go/private:context.bzl",
+    "go_context",
+)
+load(
+    "@io_bazel_rules_go//go/private:go_repository.bzl",
+    "env_execute",
+)
 
 # _bazelrc is the bazel.rc file that sets the default options for tests
 _bazelrc = """
@@ -64,7 +70,8 @@ filegroup(
 CURRENT_VERSION = "current"
 
 def _bazel_test_script_impl(ctx):
-  script_file = declare_file(ctx, ext=".bash")
+  go = go_context(ctx)
+  script_file = go.declare_file(go, ext=".bash")
 
   if ctx.attr.go_version == CURRENT_VERSION:
     register = 'go_register_toolchains()\n'
@@ -86,9 +93,9 @@ def _bazel_test_script_impl(ctx):
     workspace_content += _basic_workspace.format()
     workspace_content += register
 
-  workspace_file = declare_file(ctx, path="WORKSPACE.in")
+  workspace_file = go.declare_file(go, path="WORKSPACE.in")
   ctx.actions.write(workspace_file, workspace_content)
-  build_file = declare_file(ctx, path="BUILD.in")
+  build_file = go.declare_file(go, path="BUILD.in")
   ctx.actions.write(build_file, ctx.attr.build)
 
   targets = ["@" + ctx.workspace_name + "//" + ctx.label.package + t if t.startswith(":") else t for t in ctx.attr.targets]
@@ -110,32 +117,49 @@ def _bazel_test_script_impl(ctx):
   ctx.actions.write(output=script_file, is_executable=True, content=script_content)
   return struct(
       files = depset([script_file]),
-      runfiles = ctx.runfiles([workspace_file, build_file])
+      runfiles = ctx.runfiles([workspace_file, build_file], collect_data=True)
   )
-
 
 _bazel_test_script = rule(
     _bazel_test_script_impl,
     attrs = {
-        "command": attr.string(mandatory=True, values=["build", "test", "coverage", "run"]),
-        "args": attr.string_list(default=[]),
-        "targets": attr.string_list(mandatory=True),
-        "externals": attr.label_list(allow_files=True),
-        "go_version": attr.string(default=CURRENT_VERSION),
+        "command": attr.string(
+            mandatory = True,
+            values = [
+                "build",
+                "test",
+                "coverage",
+                "run",
+            ],
+        ),
+        "args": attr.string_list(default = []),
+        "targets": attr.string_list(mandatory = True),
+        "externals": attr.label_list(allow_files = True),
+        "go_version": attr.string(default = CURRENT_VERSION),
         "workspace": attr.string(),
         "build": attr.string(),
         "check": attr.string(),
-        "config": attr.string(default="isolate"),
-        "_bazelrc": attr.label(allow_files=True, single_file=True, default="@bazel_test//:bazelrc"),
+        "config": attr.string(default = "isolate"),
+        "data": attr.label_list(
+            allow_files = True,
+            cfg = "data",
+        ),
+        "_bazelrc": attr.label(
+            allow_files = True,
+            single_file = True,
+            default = "@bazel_test//:bazelrc",
+        ),
         "_settings": attr.label(default = Label("@bazel_test//:settings")),
+        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
+    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
 def bazel_test(name, command = None, args=None, targets = None, go_version = None, tags=[], externals=[], workspace="", build="", check="", config=None):
   script_name = name+"_script"
   externals = externals + [
       "@io_bazel_rules_go//:AUTHORS",
-      "@local_config_cc//:cc_wrapper",
+      "@local_config_cc//:toolchain",
   ]
   if go_version == None or go_version == CURRENT_VERSION:
       externals.append("@go_sdk//:packages.txt")
@@ -159,14 +183,15 @@ def bazel_test(name, command = None, args=None, targets = None, go_version = Non
       srcs = [":" + script_name],
       tags = ["local", "bazel", "exclusive"] + tags,
       data = [
+          "@bazel_gazelle//cmd/gazelle",
           "@bazel_test//:bazelrc",
           "//tests:rules_go_deps",
-          "//go/tools/gazelle/gazelle",
       ],
   )
 
 def _md5_sum_impl(ctx):
-  out = declare_file(ctx, ext=".md5")
+  go = go_context(ctx)
+  out = go.declare_file(go, ext=".md5")
   arguments = ctx.actions.args()
   arguments.add(["-output", out.path])
   arguments.add(ctx.files.srcs)
@@ -182,9 +207,15 @@ def _md5_sum_impl(ctx):
 md5_sum = rule(
     _md5_sum_impl,
     attrs = {
-        "srcs": attr.label_list(allow_files=True),
-        "_md5sum":  attr.label(allow_files=True, single_file=True, default=Label("@io_bazel_rules_go//go/tools/builders:md5sum")),
+        "srcs": attr.label_list(allow_files = True),
+        "_md5sum": attr.label(
+            allow_files = True,
+            single_file = True,
+            default = Label("@io_bazel_rules_go//go/tools/builders:md5sum"),
+        ),
+        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
+    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
 def _test_environment_impl(ctx):
@@ -199,10 +230,13 @@ def _test_environment_impl(ctx):
     bazel = ctx.which("bazel")
 
   # Get a temporary directory to use as our scratch workspace
-  result = env_execute(ctx, ["mktemp", "-d"])
-  if result.return_code:
-    fail("failed to create temporary directory for bazel tests: {}".format(result.stderr))
-  scratch_dir = result.stdout.strip()
+  if ctx.os.name.startswith('windows'):
+    scratch_dir = ctx.os.environ["TMP"].replace("\\","/") + "/bazel_go_test"
+  else:
+    result = env_execute(ctx, ["mktemp", "-d"])
+    if result.return_code:
+      fail("failed to create temporary directory for bazel tests: {}".format(result.stderr))
+    scratch_dir = result.stdout.strip()
 
   # Work out where we are running so we can find externals
   exec_root, _, _ = str(ctx.path(".")).rpartition("/external/")

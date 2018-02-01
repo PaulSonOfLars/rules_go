@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:common.bzl", "env_execute")
-load("@io_bazel_rules_go//go/private:toolchain.bzl", "executable_extension")
+load("@io_bazel_rules_go//go/private:common.bzl", "env_execute", "executable_extension")
 
 def _go_repository_impl(ctx):
   if ctx.attr.urls:
@@ -57,18 +56,19 @@ def _go_repository_impl(ctx):
     # TODO(yugui): support submodule?
     # c.f. https://www.bazel.io/versions/master/docs/be/workspace.html#git_repository.init_submodules
     _fetch_repo = "@io_bazel_rules_go_repository_tools//:bin/fetch_repo{}".format(executable_extension(ctx))
-    result = env_execute(
-        ctx,
-        [
-            ctx.path(Label(_fetch_repo)),
-            '--dest', ctx.path(''),
-            '--remote', ctx.attr.remote,
-            '--rev', rev,
-            '--vcs', ctx.attr.vcs,
-            '--importpath', ctx.attr.importpath,
-        ],
-        environment = fetch_repo_env,
-    )
+    args = [
+        ctx.path(Label(_fetch_repo)), 
+        '--dest', ctx.path(''),
+    ]
+    if ctx.attr.remote:
+        args.extend(['--remote', ctx.attr.remote])
+    if rev:
+        args.extend(['--rev', rev])
+    if ctx.attr.vcs:
+        args.extend(['--vcs', ctx.attr.vcs])
+    if ctx.attr.importpath:
+        args.extend(['--importpath', ctx.attr.importpath])
+    result = env_execute(ctx, args, environment = fetch_repo_env)
     if result.return_code:
       fail("failed to fetch %s: %s" % (ctx.name, result.stderr))
 
@@ -97,7 +97,6 @@ def _go_repository_impl(ctx):
       fail("failed to generate BUILD files for %s: %s" % (
           ctx.attr.importpath, result.stderr))
 
-
 go_repository = repository_rule(
     implementation = _go_repository_impl,
     attrs = {
@@ -107,7 +106,16 @@ go_repository = repository_rule(
         "tag": attr.string(),
 
         # Attributes for a repository that cannot be inferred from the import path
-        "vcs": attr.string(default="", values=["", "git", "hg", "svn", "bzr"]),
+        "vcs": attr.string(
+            default = "",
+            values = [
+                "",
+                "git",
+                "hg",
+                "svn",
+                "bzr",
+            ],
+        ),
         "remote": attr.string(),
 
         # Attributes for a repository that comes from a source blob not a vcs
@@ -117,11 +125,31 @@ go_repository = repository_rule(
         "sha256": attr.string(),
 
         # Attributes for a repository that needs automatic build file generation
-        "build_external": attr.string(default="external", values=["external", "vendored"]),
-        "build_file_name": attr.string(default="BUILD.bazel,BUILD"),
-        "build_file_generation": attr.string(default="auto", values=["on", "auto", "off"]),
+        "build_external": attr.string(
+            default = "external",
+            values = [
+                "external",
+                "vendored",
+            ],
+        ),
+        "build_file_name": attr.string(default = "BUILD.bazel,BUILD"),
+        "build_file_generation": attr.string(
+            default = "auto",
+            values = [
+                "on",
+                "auto",
+                "off",
+            ],
+        ),
         "build_tags": attr.string_list(),
-        "build_file_proto_mode": attr.string(default="default", values=["default", "disable", "legacy"]),
+        "build_file_proto_mode": attr.string(
+            default = "default",
+            values = [
+                "default",
+                "disable",
+                "legacy",
+            ],
+        ),
     },
 )
 """See go/workspace.rst#go-repository for full documentation."""
