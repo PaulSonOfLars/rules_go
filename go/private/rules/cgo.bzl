@@ -170,7 +170,7 @@ _cgo_codegen = rule(
 
 def _cgo_import_impl(ctx):
   go = go_context(ctx)
-  out = go.declare_file(go, ext=".go")
+  out = go.declare_file(go, path="_cgo_import.go")
   args = go.args(go)
   args.add([
       "-dynout", out,
