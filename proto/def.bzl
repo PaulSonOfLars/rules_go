@@ -30,6 +30,10 @@ load(
     "GoProtoCompiler",
     "proto_path",
 )
+load(
+    "@io_bazel_rules_go//go/private:rules/rule.bzl",
+    "go_rule",
+)
 
 GoProtoImports = provider()
 
@@ -37,8 +41,8 @@ def get_imports(attr):
   imports = []
   if hasattr(attr, "proto"):
     imports.append(["{}={}".format(proto_path(src), attr.importpath) for src in attr.proto.proto.direct_sources])
-  imports.extend([dep[GoProtoImports].imports for dep in attr.deps])
-  imports.extend([dep[GoProtoImports].imports for dep in attr.embed])
+  imports.extend([dep[GoProtoImports].imports for dep in getattr(attr, "deps", [])])
+  imports.extend([dep[GoProtoImports].imports for dep in getattr(attr, "embed", [])])
   return sets.union(*imports)
 
 def _go_proto_aspect_impl(target, ctx):
@@ -94,7 +98,7 @@ def _go_proto_library_impl(ctx):
       ),
   ]
 
-go_proto_library = rule(
+go_proto_library = go_rule(
     _go_proto_library_impl,
     attrs = {
         "proto": attr.label(
@@ -114,11 +118,7 @@ go_proto_library = rule(
             default = ["@io_bazel_rules_go//proto:go_proto"],
         ),
         "_go_prefix": attr.label(default = go_prefix_default),
-        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
-    toolchains = [
-        "@io_bazel_rules_go//go:toolchain",
-    ],
 )
 """
 go_proto_library is a rule that takes a proto_library (in the proto

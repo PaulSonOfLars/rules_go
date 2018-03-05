@@ -1,32 +1,28 @@
 load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_test", "go_source")
 
-go_source(
+test_suite(
     name = "cross",
-    srcs = ["main.go"],
 )
 
 go_binary(
-    name = "windows",
-    basename = "cross",
-    embed = [":cross"],
+    name = "windows_cross",
+    srcs = ["main.go"],
     goarch = "amd64",
     goos = "windows",
     pure = "on",
 )
 
 go_binary(
-    name = "linux",
-    basename = "cross",
-    embed = [":cross"],
+    name = "linux_cross",
+    srcs = ["main.go"],
     goarch = "amd64",
     goos = "linux",
     pure = "on",
 )
 
 go_binary(
-    name = "darwin",
-    basename = "cross",
-    embed = [":cross"],
+    name = "darwin_cross",
+    srcs = ["main.go"],
     goarch = "amd64",
     goos = "darwin",
     pure = "on",
@@ -36,9 +32,15 @@ go_test(
     name = "cross_test",
     size = "small",
     srcs = ["cross_test.go"],
+    rundir = ".",
     data = [
-        ":darwin",
-        ":linux",
-        ":windows",
+        ":darwin_cross",
+        ":linux_cross",
+        ":windows_cross",
     ],
+    args = [
+        "-darwin", "$(location :darwin_cross)",
+        "-linux", "$(location :linux_cross)",
+        "-windows", "$(location :windows_cross)",
+    ]
 )

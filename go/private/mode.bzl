@@ -22,6 +22,8 @@ LINKMODE_PIE = "pie"
 
 LINKMODE_PLUGIN = "plugin"
 
+LINKMODES = [LINKMODE_NORMAL, LINKMODE_PLUGIN]
+
 def mode_string(mode):
   result = [mode.goos, mode.goarch]
   if mode.static:
@@ -52,12 +54,11 @@ def _ternary(*values):
     fail("Invalid value {}".format(v))
   fail("_ternary failed to produce a final result from {}".format(values))
 
-def get_mode(ctx, go_toolchain, go_context_data):
+def get_mode(ctx, host_only, go_toolchain, go_context_data):
   # We always have to  use the pure stdlib in cross compilation mode
   force_pure = "on" if go_toolchain.cross_compile else "auto"
-  force_race = "off" if go_toolchain.bootstrap else "auto"
+  force_race = "off" if host_only else "auto"
 
-  #TODO: allow link mode selection
   static = _ternary(
       getattr(ctx.attr, "static", None),
       "static" in ctx.features,
@@ -76,14 +77,15 @@ def get_mode(ctx, go_toolchain, go_context_data):
       force_pure,
       "pure" in ctx.features,
   )
+  linkmode = getattr(ctx.attr, "linkmode", LINKMODE_NORMAL)
   if race and pure:
     # You are not allowed to compile in race mode with pure enabled
     race = False
-  debug = ctx.var["COMPILATION_MODE"] == "debug"
+  debug = ctx.var["COMPILATION_MODE"] == "dbg"
   strip_mode = "sometimes"
   if go_context_data:
     strip_mode = go_context_data.strip
-  strip = True
+  strip = False
   if strip_mode == "always":
     strip = True
   elif strip_mode == "sometimes":
@@ -100,7 +102,7 @@ def get_mode(ctx, go_toolchain, go_context_data):
       race = race,
       msan = msan,
       pure = pure,
-      link = LINKMODE_NORMAL,
+      link = linkmode,
       debug = debug,
       strip = strip,
       goos = goos,

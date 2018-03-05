@@ -70,10 +70,14 @@ load(
     "@io_bazel_rules_go//go/private:tools/vet.bzl",
     _go_vet_test = "go_vet_test",
 )
+load(
+    "@io_bazel_rules_go//go/private:rules/rule.bzl",
+    _go_rule = "go_rule",
+)
 
 # Current version or next version to be tagged. Gazelle and other tools may
 # check this to determine compatibility.
-RULES_GO_VERSION = "0.9.0"
+RULES_GO_VERSION = "0.10.1"
 
 GoLibrary = _GoLibrary
 """See go/providers.rst#GoLibrary for full documentation."""
@@ -89,6 +93,9 @@ go_test = _go_test_macro
 
 go_source = _go_source
 """See go/core.rst#go_test for full documentation."""
+
+go_rule = _go_rule
+"""See go/core.rst#go_rule for full documentation."""
 
 go_path = _go_path
 """

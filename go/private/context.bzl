@@ -18,6 +18,7 @@ load(
     "GoSource",
     "GoAspectProviders",
     "GoStdLib",
+    "GoBuilders",
     "get_source",
 )
 load(
@@ -35,8 +36,6 @@ load(
     "structs",
     "goos_to_extension",
     "as_iterable",
-    "auto_importpath",
-    "test_library_suffix",
 )
 
 GoContext = provider()
@@ -47,14 +46,20 @@ INFERRED_PATH = "inferred"
 
 EXPORT_PATH = "export"
 
-def _declare_file(go, path="", ext="", name = ""):
-  filename = mode_string(go.mode) + "/"
-  filename += name if name else go._ctx.label.name
+def _child_name(go, path, ext, name):
+  childname = mode_string(go.mode) + "/"
+  childname += name if name else go._ctx.label.name
   if path:
-    filename += "~/" + path
+    childname += "~/" + path
   if ext:
-    filename += ext
-  return go.actions.declare_file(filename)
+    childname += ext
+  return childname
+
+def _declare_file(go, path="", ext="", name = ""):
+  return go.actions.declare_file(_child_name(go, path, ext, name))
+
+def _declare_directory(go, path="", ext="", name = ""):
+  return go.actions.declare_directory(_child_name(go, path, ext, name))
 
 def _new_args(go):
   args = go.actions.args()
@@ -78,13 +83,20 @@ def _new_args(go):
     args.add(go.cgo_tools.linker_options, before_each = "-ld_flag")
   return args
 
-def _new_library(go, resolver=None, importable=True, **kwargs):
+def _new_library(go, name=None, importpath=None, resolver=None, importable=True, testfilter=None, **kwargs):
+  if not importpath:
+    importpath = go.importpath
+  importmap = getattr(go._ctx.attr, "importmap", "")
+  if not importmap:
+    importmap = importpath
   return GoLibrary(
-      name = go._ctx.label.name,
+      name = go._ctx.label.name if not name else name,
       label = go._ctx.label,
-      importpath = go.importpath,
+      importpath = importpath,
+      importmap = importmap,
       pathtype = go.pathtype if importable else EXPORT_PATH,
       resolve = resolver,
+      testfilter = testfilter,
       **kwargs
   )
 
@@ -127,7 +139,7 @@ def _library_to_source(go, attr, library, coverage_instrumented):
   x_defs = source["x_defs"]
   for k,v in getattr(attr, "x_defs", {}).items():
     if "." not in k:
-      k = "{}.{}".format(library.importpath, k)
+      k = "{}.{}".format(library.importmap, k)
     x_defs[k] = v
   source["x_defs"] = x_defs
   if library.resolve:
@@ -140,8 +152,6 @@ def _infer_importpath(ctx):
   # Check if import path was explicitly set
   path = getattr(ctx.attr, "importpath", "")
   # are we in forced infer mode?
-  if path == auto_importpath:
-    path = ""
   if path != "":
     return path, EXPLICIT_PATH
   # See if we can collect importpath from embeded libraries
@@ -151,18 +161,6 @@ def _infer_importpath(ctx):
       continue
     if embed[GoLibrary].pathtype == EXPLICIT_PATH:
       return embed[GoLibrary].importpath, EXPLICIT_PATH
-  # If we are a test, and we have a dep in the same package, presume
-  # we should be named the same with an _test suffix
-  if ctx.label.name.endswith("_test" + test_library_suffix):
-    for dep in getattr(ctx.attr, "deps", []):
-      if GoLibrary not in dep:
-        continue
-      lib = dep[GoLibrary]
-      if lib.label.workspace_root != ctx.label.workspace_root:
-        continue
-      if lib.label.package != ctx.label.package:
-        continue
-      return lib.importpath + "_test", INFERRED_PATH
   # TODO: stop using the prefix
   prefix = getattr(ctx.attr, "_go_prefix", None)
   path = prefix.go_prefix if prefix else ""
@@ -195,31 +193,25 @@ def _get_go_binary(context_data):
   fail("Could not find go executable in go_sdk")
 
 def go_context(ctx, attr=None):
-  if "@io_bazel_rules_go//go:toolchain" in ctx.toolchains:
-    toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-  elif "@io_bazel_rules_go//go:bootstrap_toolchain" in ctx.toolchains:
-    toolchain = ctx.toolchains["@io_bazel_rules_go//go:bootstrap_toolchain"]
-  else:
-    fail('Rule {} does not have the go toolchain available\nAdd toolchains = ["@io_bazel_rules_go//go:toolchain"] to the rule definition.'.format(ctx.label))
+  toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
 
   if not attr:
     attr = ctx.attr
 
+  builders = getattr(attr, "_builders", None)
+  if builders:
+    builders = builders[GoBuilders]
+  else:
+    builders = GoBuilders(compile=None, link=None)
+  host_only = getattr(attr, "_hostonly", False)
+
   context_data = attr._go_context_data
-  mode = get_mode(ctx, toolchain, context_data)
+  mode = get_mode(ctx, host_only, toolchain, context_data)
   root, binary = _get_go_binary(context_data)
 
-  stdlib = None
-  for check in [s[GoStdLib] for s in context_data.stdlib_all]:
-    if (check.goos == mode.goos and
-        check.goarch == mode.goarch and
-        check.race == mode.race and
-        check.pure == mode.pure):
-      if stdlib:
-        fail("Multiple matching standard library for "+mode_string(mode))
-      stdlib = check
-  if not stdlib and context_data.stdlib_all:
-    fail("No matching standard library for "+mode_string(mode))
+  stdlib = getattr(attr, "_stdlib", None)
+  if stdlib:
+    stdlib = get_source(stdlib).stdlib
 
   importpath, pathtype = _infer_importpath(ctx)
   return GoContext(
@@ -238,6 +230,7 @@ def go_context(ctx, attr=None):
       importpath = importpath,
       pathtype = pathtype,
       cgo_tools = context_data.cgo_tools,
+      builders = builders,
       # Action generators
       archive = toolchain.actions.archive,
       asm = toolchain.actions.asm,
@@ -252,21 +245,11 @@ def go_context(ctx, attr=None):
       new_library = _new_library,
       library_to_source = _library_to_source,
       declare_file = _declare_file,
+      declare_directory = _declare_directory,
 
       # Private
       _ctx = ctx, # TODO: All uses of this should be removed
   )
-
-def _stdlib_all():
-  stdlibs = []
-  for goos, goarch in GOOS_GOARCH:
-    stdlibs.extend([
-      Label("@go_stdlib_{}_{}_cgo".format(goos, goarch)),
-      Label("@go_stdlib_{}_{}_pure".format(goos, goarch)),
-      Label("@go_stdlib_{}_{}_cgo_race".format(goos, goarch)),
-      Label("@go_stdlib_{}_{}_pure_race".format(goos, goarch)),
-    ])
-  return stdlibs
 
 def _go_context_data(ctx):
   cpp = ctx.fragments.cpp
@@ -287,7 +270,6 @@ def _go_context_data(ctx):
   compiler_path, _ = cpp.ld_executable.rsplit("/", 1)
   return struct(
       strip = ctx.attr.strip,
-      stdlib_all = ctx.attr.stdlib_all,
       crosstool = ctx.files._crosstool,
       package_list = ctx.file._package_list,
       sdk_files = ctx.files._sdk_files,
@@ -307,7 +289,6 @@ go_context_data = rule(
     _go_context_data,
     attrs = {
         "strip": attr.string(mandatory = True),
-        "stdlib_all": attr.label_list(default = _stdlib_all()),
         # Hidden internal attributes
         "_crosstool": attr.label(default = Label("//tools/defaults:crosstool")),
         "_package_list": attr.label(

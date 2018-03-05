@@ -16,6 +16,9 @@ load(
     "@io_bazel_rules_go//go/private:common.bzl",
     "sets",
 )
+load("@io_bazel_rules_go//go/private:mode.bzl",
+    "LINKMODE_PLUGIN",
+)
 
 def _importpath(l):
   return [v.data.importpath for v in l]
@@ -23,16 +26,24 @@ def _importpath(l):
 def _searchpath(l):
   return [v.data.searchpath for v in l]
 
+def _importmap(l):
+  return ["{}={}".format(v.data.importpath, v.data.importmap) for v in l]
+
 def emit_compile(go,
     sources = None,
     importpath = "",
     archives = [],
     out_lib = None,
-    gc_goopts = []):
+    gc_goopts = [],
+    testfilter = None):
   """See go/toolchains.rst#compile for full documentation."""
 
   if sources == None: fail("sources is a required parameter")
   if out_lib == None: fail("out_lib is a required parameter")
+
+  if not go.builders.compile:
+    if archives:  fail("compile does not accept deps in bootstrap mode")
+    return _bootstrap_compile(go, sources, out_lib, gc_goopts)
 
   # Add in any mode specific behaviours
   if go.mode.race:
@@ -55,7 +66,10 @@ def emit_compile(go,
   args.add(go_sources, before_each="-src")
   args.add(archives, before_each="-dep", map_fn=_importpath)
   args.add(archives, before_each="-I", map_fn=_searchpath)
+  args.add(archives, before_each="-importmap", map_fn=_importmap)
   args.add(["-o", out_lib, "-trimpath", ".", "-I", "."])
+  if testfilter:
+    args.add(["--testfilter", testfilter])
   args.add(["--"])
   if importpath:
     args.add(["-p", importpath])
@@ -63,27 +77,18 @@ def emit_compile(go,
   args.add(go.toolchain.flags.compile)
   if go.mode.debug:
     args.add(["-N", "-l"])
+  if go.mode.link in [LINKMODE_PLUGIN]:
+    args.add(["-dynlink"])
   args.add(cgo_sources)
   go.actions.run(
       inputs = inputs,
       outputs = [out_lib],
       mnemonic = "GoCompile",
-      executable = go.toolchain.tools.compile,
+      executable = go.builders.compile,
       arguments = [args],
   )
 
-def bootstrap_compile(go,
-    sources = None,
-    importpath = "",
-    archives = [],
-    out_lib = None,
-    gc_goopts = []):
-  """See go/toolchains.rst#compile for full documentation."""
-
-  if sources == None: fail("sources is a required parameter")
-  if out_lib == None: fail("out_lib is a required parameter")
-  if archives:  fail("compile does not accept deps in bootstrap mode")
-
+def _bootstrap_compile(go, sources, out_lib, gc_goopts):
   args = ["tool", "compile", "-trimpath", "$(pwd)", "-o", out_lib.path]
   args.extend(gc_goopts)
   args.extend([s.path for s in sources])

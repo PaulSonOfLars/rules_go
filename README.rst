@@ -39,7 +39,10 @@ Travis   Jenkins
 Announcements
 -------------
 
-January 2, 2017
+January 11, 2018
+  Release `0.9.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.9.0>`_
+  is now available.
+January 2, 2018
   The old Gazelle subtree (//go/tools/gazelle) will be removed soon. See
   `#1199`_ for details. Please migrate to
   `github.com/bazelbuild/bazel-gazelle`_.
@@ -49,9 +52,6 @@ December 14, 2017
   what you think.
 December 13, 2017
   Release `0.8.1 <https://github.com/bazelbuild/rules_go/releases/tag/0.8.1>`_
-  is now available.
-December 6, 2017
-  Release `0.8.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.8.0>`_
   is now available.
 
 .. contents::
@@ -92,7 +92,7 @@ They currently do not support (in order of importance):
 * coverage
 * test sharding
 
-:Note: The latest version of these rules (0.8.1) requires Bazel ≥ 0.8.0 to work.
+:Note: The latest version of these rules (0.9.0) requires Bazel ≥ 0.8.0 to work.
 
 The ``master`` branch is only guaranteed to work with the latest version of Bazel.
 
@@ -110,8 +110,8 @@ Setup
 
     http_archive(
         name = "io_bazel_rules_go",
-        url = "https://github.com/bazelbuild/rules_go/releases/download/0.8.1/rules_go-0.8.1.tar.gz",
-        sha256 = "90bb270d0a92ed5c83558b2797346917c46547f6f7103e648941ecdb6b9d0e72",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.9.0/rules_go-0.9.0.tar.gz",
+        sha256 = "4d8d6244320dd751590f9100cf39fd7a4b75cd901e1f3ffdfd6f048328883695",
     )
     load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
     go_rules_dependencies()
@@ -149,16 +149,24 @@ Generating build files
 If your project can be built with ``go build``, you can generate and update your
 build files automatically using gazelle_.
 
-* Add the code below to your WORKSPACE file *after* ``io_bazel_rules_go`` and
-  its dependencies are loaded.
+* Add the ``bazel_gazelle`` repository and its dependencies to your WORKSPACE
+  file before ``go_rules_dependencies`` is called. It should look like this:
 
-.. code:: bzl
+  .. code:: bzl
 
     http_archive(
-        name = "bazel_gazelle",
-        url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.8/bazel-gazelle-0.8.tar.gz",
-        sha256 = "e3dadf036c769d1f40603b86ae1f0f90d11837116022d9b06e4cd88cae786676",
+        name = "io_bazel_rules_go",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.9.0/rules_go-0.9.0.tar.gz",
+        sha256 = "4d8d6244320dd751590f9100cf39fd7a4b75cd901e1f3ffdfd6f048328883695",
     )
+    http_archive(
+        name = "bazel_gazelle",
+        url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.9/bazel-gazelle-0.9.tar.gz",
+        sha256 = "0103991d994db55b3b5d7b06336f8ae355739635e0c2379dea16b8213ea5a223",
+    )
+    load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
+    go_rules_dependencies()
+    go_register_toolchains()
     load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
     gazelle_dependencies()
 
@@ -166,14 +174,14 @@ build files automatically using gazelle_.
   of your repository. Replace the string in ``prefix`` with the prefix you
   chose for your project earlier.
 
-.. code:: bzl
+  .. code:: bzl
 
-  load("@bazel_gazelle//:def.bzl", "gazelle")
+    load("@bazel_gazelle//:def.bzl", "gazelle")
 
-  gazelle(
-      name = "gazelle",
-      prefix = "github.com/example/project",
-  )
+    gazelle(
+        name = "gazelle",
+        prefix = "github.com/example/project",
+    )
 
 * After adding the ``gazelle`` rule, run the command below:
 
@@ -250,7 +258,6 @@ gazelle_, you can write build files by hand.
         name = "foo",
         srcs = ["main.go"],
         deps = [":go_default_library"],
-        importpath = "github.com/example/project/foo",
     )
 
 * For instructions on how to depend on external libraries,
@@ -428,3 +435,10 @@ must be named ``go_sdk``, and it must come *before* the call to
   go_register_toolchains()
 
   
+How do I get information about the Go SDK used by rules_go?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You can run: ``bazel build @io_bazel_rules_go//:go_info`` which outputs
+``go_info_report`` with information like the used Golang version.
+
+

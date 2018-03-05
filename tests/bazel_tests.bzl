@@ -6,6 +6,10 @@ load(
     "@io_bazel_rules_go//go/private:go_repository.bzl",
     "env_execute",
 )
+load(
+    "@io_bazel_rules_go//go/private:rules/rule.bzl",
+    "go_rule",
+)
 
 # _bazelrc is the bazel.rc file that sets the default options for tests
 _bazelrc = """
@@ -47,6 +51,9 @@ result=$?
 
 {check}
 
+if [ "$result" -ne 0 ]; then
+  cat bazel-output.txt
+fi
 exit $result
 """
 
@@ -120,7 +127,7 @@ def _bazel_test_script_impl(ctx):
       runfiles = ctx.runfiles([workspace_file, build_file], collect_data=True)
   )
 
-_bazel_test_script = rule(
+_bazel_test_script = go_rule(
     _bazel_test_script_impl,
     attrs = {
         "command": attr.string(
@@ -150,9 +157,7 @@ _bazel_test_script = rule(
             default = "@bazel_test//:bazelrc",
         ),
         "_settings": attr.label(default = Label("@bazel_test//:settings")),
-        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
-    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
 def bazel_test(name, command = None, args=None, targets = None, go_version = None, tags=[], externals=[], workspace="", build="", check="", config=None):
@@ -185,7 +190,7 @@ def bazel_test(name, command = None, args=None, targets = None, go_version = Non
       data = [
           "@bazel_gazelle//cmd/gazelle",
           "@bazel_test//:bazelrc",
-          "//tests:rules_go_deps",
+          "@io_bazel_rules_go//tests:rules_go_deps",
       ],
   )
 
@@ -204,7 +209,7 @@ def _md5_sum_impl(ctx):
   )
   return struct(files=depset([out]))
 
-md5_sum = rule(
+md5_sum = go_rule(
     _md5_sum_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = True),
@@ -213,9 +218,7 @@ md5_sum = rule(
             single_file = True,
             default = Label("@io_bazel_rules_go//go/tools/builders:md5sum"),
         ),
-        "_go_context_data": attr.label(default = Label("@io_bazel_rules_go//:go_context_data")),
     },
-    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
 
 def _test_environment_impl(ctx):

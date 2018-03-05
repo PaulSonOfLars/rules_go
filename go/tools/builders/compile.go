@@ -31,14 +31,17 @@ func run(args []string) error {
 	unfiltered := multiFlag{}
 	deps := multiFlag{}
 	search := multiFlag{}
+	importmap := multiFlag{}
 	flags := flag.NewFlagSet("compile", flag.ContinueOnError)
 	goenv := envFlags(flags)
 	flags.Var(&unfiltered, "src", "A source file to be filtered and compiled")
 	flags.Var(&deps, "dep", "Import path of a direct dependency")
 	flags.Var(&search, "I", "Search paths of a direct dependency")
+	flags.Var(&importmap, "importmap", "Import maps of a direct dependency")
 	trimpath := flags.String("trimpath", "", "The base of the paths to trim")
 	output := flags.String("o", "", "The output object file to write")
 	packageList := flags.String("package_list", "", "The file containing the list of standard library packages")
+	testfilter := flags.String("testfilter", "off", "Controls test package filtering")
 	// process the args
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -47,19 +50,37 @@ func run(args []string) error {
 		return err
 	}
 
+	var matcher func(f *goMetadata) bool
+	switch *testfilter {
+	case "off":
+		matcher = func(f *goMetadata) bool {
+			return true
+		}
+	case "only":
+		matcher = func(f *goMetadata) bool {
+			return strings.HasSuffix(f.pkg, "_test")
+		}
+	case "exclude":
+		matcher = func(f *goMetadata) bool {
+			return !strings.HasSuffix(f.pkg, "_test")
+		}
+	default:
+		return fmt.Errorf("Invalid test filter %q", *testfilter)
+	}
 	// apply build constraints to the source list
 	bctx := goenv.BuildContext()
-	files, err := readFiles(bctx, unfiltered)
+	all, err := readFiles(bctx, unfiltered)
 	if err != nil {
 		return err
 	}
+	files := []*goMetadata{}
+	for _, f := range all {
+		if matcher(f) {
+			files = append(files, f)
+		}
+	}
 	if len(files) <= 0 {
 		return ioutil.WriteFile(*output, []byte(""), 0644)
-	}
-
-	// Check that the filtered sources don't import anything outside of deps.
-	if err := checkDirectDeps(bctx, files, deps, *packageList); err != nil {
-		return err
 	}
 
 	goargs := []string{"tool", "compile"}
@@ -67,11 +88,31 @@ func run(args []string) error {
 	for _, path := range search {
 		goargs = append(goargs, "-I", abs(path))
 	}
+	strictdeps := deps
+	for _, mapping := range importmap {
+		i := strings.Index(mapping, "=")
+		if i < 0 {
+			return fmt.Errorf("Invalid importmap %v: no = separator", mapping)
+		}
+		source := mapping[:i]
+		actual := mapping[i+1:]
+		if source == "" || actual == "" || source == actual {
+			continue
+		}
+		goargs = append(goargs, "-importmap", mapping)
+		strictdeps = append(strictdeps, source)
+	}
 	goargs = append(goargs, "-pack", "-o", *output)
 	goargs = append(goargs, flags.Args()...)
 	for _, f := range files {
 		goargs = append(goargs, f.filename)
 	}
+
+	// Check that the filtered sources don't import anything outside of deps.
+	if err := checkDirectDeps(bctx, files, strictdeps, *packageList); err != nil {
+		return err
+	}
+
 	env := os.Environ()
 	env = append(env, goenv.Env()...)
 	cmd := exec.Command(goenv.Go, goargs...)
