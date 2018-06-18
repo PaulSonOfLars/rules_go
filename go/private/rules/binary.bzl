@@ -18,7 +18,8 @@ load(
 )
 load(
     "@io_bazel_rules_go//go/private:common.bzl",
-    "go_filetype",
+    "asm_exts",
+    "go_exts",
 )
 load(
     "@io_bazel_rules_go//go/private:rules/prefix.bzl",
@@ -50,27 +51,34 @@ load(
 def _go_binary_impl(ctx):
   """go_binary_impl emits actions for compiling and linking a go executable."""
   go = go_context(ctx)
-  if ctx.attr.linkstamp:
-    print("DEPRECATED: linkstamp, please use x_def for all stamping now {}".format(ctx.attr.linkstamp))
 
   library = go.new_library(go, importable=False)
   source = go.library_to_source(go, ctx.attr, library, ctx.coverage_instrumented())
   name = ctx.attr.basename
   if not name:
     name = ctx.label.name
-  archive, executable = go.binary(go,
+  executable = None
+  if ctx.attr.out:
+    # Use declare_file instead of attr.output(). When users set output files
+    # directly, Bazel warns them not to use the same name as the rule, which is
+    # the common case with go_binary.
+    executable = ctx.actions.declare_file(ctx.attr.out)
+  archive, executable, runfiles = go.binary(go,
       name = name,
       source = source,
       gc_linkopts = gc_linkopts(ctx),
-      linkstamp=ctx.attr.linkstamp,
-      version_file=ctx.version_file,
-      info_file=ctx.info_file,
+      version_file = ctx.version_file,
+      info_file = ctx.info_file,
+      executable = executable,
   )
   return [
       library, source, archive,
+      OutputGroupInfo(
+          cgo_exports = archive.cgo_exports,
+      ),
       DefaultInfo(
           files = depset([executable]),
-          runfiles = archive.runfiles,
+          runfiles = runfiles,
           executable = executable,
       ),
   ]
@@ -83,7 +91,7 @@ go_binary = go_rule(
             allow_files = True,
             cfg = "data",
         ),
-        "srcs": attr.label_list(allow_files = go_filetype),
+        "srcs": attr.label_list(allow_files = go_exts + asm_exts),
         "deps": attr.label_list(
             providers = [GoLibrary],
             aspects = [go_archive_aspect],
@@ -92,6 +100,7 @@ go_binary = go_rule(
             providers = [GoLibrary],
             aspects = [go_archive_aspect],
         ),
+        "importpath": attr.string(),
         "pure": attr.string(
             values = [
                 "on",
@@ -134,9 +143,9 @@ go_binary = go_rule(
         ),
         "gc_goopts": attr.string_list(),
         "gc_linkopts": attr.string_list(),
-        "linkstamp": attr.string(),
         "x_defs": attr.string_dict(),
         "linkmode": attr.string(values=LINKMODES, default=LINKMODE_NORMAL),
+        "out": attr.string(),
     },
     executable = True,
 )
@@ -151,14 +160,14 @@ go_tool_binary = go_rule(
             allow_files = True,
             cfg = "data",
         ),
-        "srcs": attr.label_list(allow_files = go_filetype),
+        "srcs": attr.label_list(allow_files = go_exts + asm_exts),
         "deps": attr.label_list(providers = [GoLibrary]),
         "embed": attr.label_list(providers = [GoLibrary]),
         "gc_goopts": attr.string_list(),
         "gc_linkopts": attr.string_list(),
-        "linkstamp": attr.string(),
         "x_defs": attr.string_dict(),
         "linkmode": attr.string(values=LINKMODES, default=LINKMODE_NORMAL),
+        "out": attr.string(),
         "_hostonly": attr.bool(default=True),
     },
     executable = True,

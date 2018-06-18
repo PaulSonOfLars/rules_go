@@ -15,11 +15,11 @@
 load(
     "@io_bazel_rules_go//go/private:context.bzl",
     "go_context",
-    "EXPORT_PATH",
 )
 load(
     "@io_bazel_rules_go//go/private:common.bzl",
-    "go_filetype",
+    "asm_exts",
+    "go_exts",
     "split_srcs",
     "pkg_dir",
 )
@@ -33,6 +33,7 @@ load(
 )
 load(
     "@io_bazel_rules_go//go/private:providers.bzl",
+    "INFERRED_PATH",
     "GoLibrary",
     "get_archive",
 )
@@ -59,8 +60,6 @@ def _go_test_impl(ctx):
   test into a binary."""
 
   go = go_context(ctx)
-  if ctx.attr.linkstamp:
-    print("DEPRECATED: linkstamp, please use x_def for all stamping now {}".format(ctx.attr.linkstamp))
 
   # Compile the library to test with internal white box tests
   internal_library = go.new_library(go, testfilter="exclude")
@@ -78,7 +77,7 @@ def _go_test_impl(ctx):
       srcs = [struct(files=go_srcs)],
       deps = internal_archive.direct + [internal_archive],
       x_defs = ctx.attr.x_defs,
-  ), external_library, False)
+  ), external_library, ctx.coverage_instrumented())
   external_archive = go.archive(go, external_source)
   external_srcs = split_srcs(external_source.srcs).go
 
@@ -94,12 +93,13 @@ def _go_test_impl(ctx):
   main_go = go.declare_file(go, "testmain.go")
   arguments = go.args(go)
   arguments.add(['-rundir', run_dir, '-output', main_go])
+  if ctx.configuration.coverage_enabled:
+    arguments.add(["-coverage"])
   arguments.add([
       # the l is the alias for the package under test, the l_test must be the
       # same with the test suffix
       '-import', "l="+internal_source.library.importpath,
       '-import', "l_test="+external_source.library.importpath])
-  arguments.add(external_archive.cover_vars, before_each="-cover")
   arguments.add(go_srcs, before_each="-src", format="l=%s")
   ctx.actions.run(
       inputs = go_srcs,
@@ -118,31 +118,49 @@ def _go_test_impl(ctx):
       label = go._ctx.label,
       importpath = "testmain",
       importmap = "testmain",
-      pathtype = EXPORT_PATH,
+      pathtype = INFERRED_PATH,
       resolve = None,
   )
+  test_deps = external_archive.direct + [external_archive]
+  if ctx.configuration.coverage_enabled:
+    test_deps.append(go.coverdata)
   test_source = go.library_to_source(go, struct(
       srcs = [struct(files=[main_go])],
-      deps = external_archive.direct + [external_archive],
+      deps = test_deps,
   ), test_library, False)
-  test_archive, executable = go.binary(go,
+  test_archive, executable, runfiles = go.binary(go,
       name = ctx.label.name,
       source = test_source,
+      test_archives = [internal_archive.data],
       gc_linkopts = gc_linkopts(ctx),
-      linkstamp=ctx.attr.linkstamp,
       version_file=ctx.version_file,
       info_file=ctx.info_file,
   )
 
-  runfiles = ctx.runfiles(files = [executable])
-  runfiles = runfiles.merge(test_archive.runfiles)
-  return [
-      DefaultInfo(
-          files = depset([executable]),
-          runfiles = runfiles,
-          executable = executable,
+  # Bazel only looks for coverage data if the test target has an
+  # InstrumentedFilesProvider, but this provider can currently only be
+  # created using "legacy" provider syntax. Old and new provider syntaxes
+  # can be combined by putting new-style providers in a providers field
+  # of the old-style struct.
+  # If the provider is found and at least one source file is present, Bazel
+  # will set the COVERAGE_OUTPUT_FILE environment variable during tests
+  # and will save that file to the build events + test outputs.
+  return struct(
+      providers = [
+          test_archive,
+          DefaultInfo(
+              files = depset([executable]),
+              runfiles = runfiles,
+              executable = executable,
+          ),
+      ],
+      instrumented_files = struct(
+          extensions = ['go'],
+          source_attributes = ['srcs'],
+          dependency_attributes = ['deps', 'embed'],
       ),
-]
+  )
+
 
 go_test = go_rule(
     _go_test_impl,
@@ -151,7 +169,7 @@ go_test = go_rule(
             allow_files = True,
             cfg = "data",
         ),
-        "srcs": attr.label_list(allow_files = go_filetype),
+        "srcs": attr.label_list(allow_files = go_exts + asm_exts),
         "deps": attr.label_list(
             providers = [GoLibrary],
             aspects = [go_archive_aspect],
@@ -160,6 +178,7 @@ go_test = go_rule(
             providers = [GoLibrary],
             aspects = [go_archive_aspect],
         ),
+        "importpath": attr.string(),
         "pure": attr.string(
             values = [
                 "on",
@@ -194,7 +213,6 @@ go_test = go_rule(
         ),
         "gc_goopts": attr.string_list(),
         "gc_linkopts": attr.string_list(),
-        "linkstamp": attr.string(),
         "rundir": attr.string(),
         "x_defs": attr.string_dict(),
         "linkmode": attr.string(default=LINKMODE_NORMAL),

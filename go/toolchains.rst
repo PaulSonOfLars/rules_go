@@ -61,7 +61,7 @@ The toolchain
 ~~~~~~~~~~~~~
 
 This a wrapper over the sdk that provides enough extras to match, target and work on a specific
-platforms. It should be considered an opaqute type, you only ever use it through `the context`_.
+platforms. It should be considered an opaque type, you only ever use it through `the context`_.
 
 Declaration
 ^^^^^^^^^^^
@@ -114,6 +114,8 @@ hidden attributes that it consumes.
 
 .. code:: bzl
 
+  load("@io_bazel_rules_go//go:def.bzl", "go_context", "go_rule")
+
   my_rule = go_rule(
       _my_rule_impl,
       attrs = {
@@ -126,8 +128,7 @@ And then in the rule body, you need to get the toolchain itself and use it's act
 .. code:: bzl
 
   def _my_rule_impl(ctx):
-    go_toolchain = ctx.toolchains["@io_bazel_rules_go//go:toolchain"]
-    srcs, vars = go_toolchain.actions.cover(ctx, go_toolchain, ctx.files.srcs)
+    go = go_context(ctx)
 
 
 Customizing
@@ -308,9 +309,9 @@ go_host_sdk
 
 This detects the host Go SDK for use in toolchains.
 
-It first checks the GOROOT and then searches the PATH. You can achive the same result by setting
+It first checks the GOROOT and then searches the PATH. You can achieve the same result by setting
 the version to "host" when registering toolchains to select the `installed sdk`_ so it should
-never be neccesary to use this feature directly.
+never be necessary to use this feature directly.
 
 +--------------------------------+-----------------------------+-----------------------------------+
 | **Name**                       | **Type**                    | **Default value**                 |
@@ -395,7 +396,7 @@ go_context
 ~~~~~~~~~~
 
 This collects the information needed to form and return a :type:`GoContext` from a rule ctx.
-It uses the attrbutes and the toolchains.
+It uses the attributes and the toolchains.
 It can only be used in the implementation of a rule that has the go toolchain attached and
 the go context data as an attribute. To do this declare the rule using the go_rule wrapper.
 
@@ -559,9 +560,10 @@ binary
 ~~~~~~
 
 This emits actions to compile and link Go code into a binary.
-It supports embedding, cgo dependencies, coverage, and assembling and packing .s files.
+It supports embedding, cgo dependencies, coverage, and assembling and packing
+.s files.
 
-It returns GoLibrary_.
+It returns a tuple containing GoArchive_ and the output executable file.
 
 +--------------------------------+-----------------------------+-----------------------------------+
 | **Name**                       | **Type**                    | **Default value**                 |
@@ -570,9 +572,9 @@ It returns GoLibrary_.
 +--------------------------------+-----------------------------+-----------------------------------+
 | This must be the same GoContext object you got this function from.                               |
 +--------------------------------+-----------------------------+-----------------------------------+
-| :param:`name`                  | :type:`string`              | |mandatory|                       |
+| :param:`name`                  | :type:`string`              | :value:`""`                       |
 +--------------------------------+-----------------------------+-----------------------------------+
-| The base name of the generated binaries.                                                         |
+| The base name of the generated binaries. Required if :param:`executable` is not given.           |
 +--------------------------------+-----------------------------+-----------------------------------+
 | :param:`source`                | :type:`GoSource`            | |mandatory|                       |
 +--------------------------------+-----------------------------+-----------------------------------+
@@ -580,13 +582,25 @@ It returns GoLibrary_.
 +--------------------------------+-----------------------------+-----------------------------------+
 | :param:`gc_linkopts`           | :type:`string_list`         | :value:`[]`                       |
 +--------------------------------+-----------------------------+-----------------------------------+
-| Basic link options.                                                                              |
+| Go link options.                                                                                 |
 +--------------------------------+-----------------------------+-----------------------------------+
-| :param:`x_defs`                | :type:`map`                 | :value:`{}`                       |
+| :param:`linkstamp`             | :type:`string`              | :value:`None`                     |
 +--------------------------------+-----------------------------+-----------------------------------+
-| Link defines, including build stamping ones.                                                     |
+| Optional link stamp. See link_.                                                                  |
 +--------------------------------+-----------------------------+-----------------------------------+
-
+| :param:`version_file`          | :type:`File`                | :value:`None`                     |
++--------------------------------+-----------------------------+-----------------------------------+
+| Version file used for link stamping. See link_.                                                  |
++--------------------------------+-----------------------------+-----------------------------------+
+| :param:`info_file`             | :type:`File`                | :value:`None`                     |
++--------------------------------+-----------------------------+-----------------------------------+
+| Info file used for link stamping. See link_.                                                     |
++--------------------------------+-----------------------------+-----------------------------------+
+| :param:`executable`            | :type:`File`                | :value:`None`                     |
++--------------------------------+-----------------------------+-----------------------------------+
+| Optional output file to write. If not set, ``binary`` will generate an output                    |
+| file name based on ``name``, the target platform, and the link mode.                             |
++--------------------------------+-----------------------------+-----------------------------------+
 
 compile
 ~~~~~~~
@@ -637,8 +651,7 @@ cover
 The cover function adds an action that runs ``go tool cover`` on a set of source files
 to produce copies with cover instrumentation.
 
-Returns a tuple of a covered GoSource with the required source files processed for cover and
-the cover vars that were added.
+Returns a covered GoSource_ with the required source files process for coverage.
 
 Note that this removes most comments, including cgo comments.
 
@@ -716,10 +729,10 @@ It does not return anything.
 +--------------------------------+-----------------------------+-----------------------------------+
 | An iterable of object files to be added to the output archive file.                              |
 +--------------------------------+-----------------------------+-----------------------------------+
-| :param:`archive`               | :type:`File`                | :value:`None`                     |
+| :param:`archives`              | :type:`list of File`        | :value:`[]`                       |
 +--------------------------------+-----------------------------+-----------------------------------+
-| An additional archive whose objects will be appended to the output.                              |
-| This can be an ar file in either common form or either the bsd or sysv variations.               |
+| Additional archives whose objects will be appended to the output.                                |
+| These can be ar files in either common form or either the bsd or sysv variations.                |
 +--------------------------------+-----------------------------+-----------------------------------+
 
 
@@ -824,3 +837,4 @@ they will be visible to the resolver when it is invoked.
 | This controls whether the GoLibrary_ is supposed to be importable. This is generally only false  |
 | for the "main" libraries that are built just before linking.                                     |
 +--------------------------------+-----------------------------+-----------------------------------+
+

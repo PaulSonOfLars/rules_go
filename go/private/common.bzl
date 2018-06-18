@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@io_bazel_rules_go//go/private:providers.bzl", "GoLibrary")
 load("//go/private:skylib/lib/dicts.bzl", "dicts")
 load("//go/private:skylib/lib/paths.bzl", "paths")
 load("//go/private:skylib/lib/sets.bzl", "sets")
@@ -41,6 +40,10 @@ hdr_exts = [
 
 c_exts = [
     ".c",
+    ".h",
+]
+
+cxx_exts = [
     ".cc",
     ".cxx",
     ".cpp",
@@ -50,13 +53,14 @@ c_exts = [
     ".hxx",
 ]
 
-go_filetype = FileType(go_exts + asm_exts)
-
-cc_hdr_filetype = FileType(hdr_exts)
-
-# Extensions of files we can build with the Go compiler or with cc_library.
-# This is a subset of the extensions recognized by go/build.
-cgo_filetype = FileType(go_exts + asm_exts + c_exts)
+objc_exts = [
+    ".m",
+    ".mm",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+]
 
 def pkg_dir(workspace_root, package_name):
   """Returns a relative path to a package directory from the root of the
@@ -70,30 +74,38 @@ def pkg_dir(workspace_root, package_name):
   return "."
 
 def split_srcs(srcs):
-  go = []
-  headers = []
-  asm = []
-  c = []
-  for src in as_iterable(srcs):
-    if any([src.basename.endswith(ext) for ext in go_exts]):
-      go.append(src)
-    elif any([src.basename.endswith(ext) for ext in hdr_exts]):
-      headers.append(src)
-    elif any([src.basename.endswith(ext) for ext in asm_exts]):
-      asm.append(src)
-    elif any([src.basename.endswith(ext) for ext in c_exts]):
-      c.append(src)
-    else:
-      fail("Unknown source type {0}".format(src.basename))
-  return struct(
-      go = go,
-      headers = headers,
-      asm = asm,
-      c = c,
+  sources = struct(
+    go = [],
+    asm = [],
+    headers = [],
+    c = [],
+    cxx = [],
+    objc = [],
   )
+  ext_pairs = (
+    (sources.go, go_exts),
+    (sources.headers, hdr_exts),
+    (sources.asm, asm_exts),
+    (sources.c, c_exts),
+    (sources.cxx, cxx_exts),
+    (sources.objc, objc_exts),
+  )
+  extmap = {}
+  for outs, exts in ext_pairs:
+    for ext in exts:
+      ext = ext[1:] # strip the dot
+      if ext in extmap:
+        break
+      extmap[ext] = outs
+  for src in as_iterable(srcs):
+    extouts = extmap.get(src.extension)
+    if extouts == None:
+      fail("Unknown source type {0}".format(src.basename))
+    extouts.append(src)
+  return sources
 
 def join_srcs(source):
-  return source.go + source.headers + source.asm + source.c
+  return source.go + source.headers + source.asm + source.c + source.cxx + source.objc
 
 def env_execute(ctx, arguments, environment = {}, **kwargs):
   """env_executes a command in a repository context. It prepends "env -i"
@@ -125,6 +137,16 @@ def goos_to_extension(goos):
   if goos == "windows":
     return ".exe"
   return ""
+
+ARCHIVE_EXTENSION = ".a"
+
+SHARED_LIB_EXTENSIONS = [".dll", ".dylib", ".so"]
+
+def goos_to_shared_extension(goos):
+  return {
+    "windows": ".dll",
+    "darwin": ".dylib",
+  }.get(goos, ".so")
 
 MINIMUM_BAZEL_VERSION = "0.8.0"
 

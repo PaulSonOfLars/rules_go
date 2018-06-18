@@ -18,111 +18,161 @@ load(
 )
 load(
     "@io_bazel_rules_go//go/private:providers.bzl",
-    "GoLibrary",
+    "GoArchive",
     "GoPath",
     "get_archive",
+    "effective_importpath_pkgpath",
 )
 load(
     "@io_bazel_rules_go//go/private:common.bzl",
     "as_iterable",
+    "as_list",
 )
 load(
     "@io_bazel_rules_go//go/private:rules/rule.bzl",
     "go_rule",
 )
 
-def _tag(go, path, outputs):
-  """this generates a existance tag file for dependencies, and returns the path to the tag file"""
-  tag = go.declare_file(go, path=path+".tag")
-  path, _, _ = tag.short_path.rpartition("/")
-  go.actions.write(tag, content="")
-  outputs.append(tag)
-  return path
-
 def _go_path_impl(ctx):
-  print("""
-EXPERIMENTAL: the go_path rule is still very experimental
-Please do not rely on it for production use, but feel free to use it and file issues
-""")
-  go = go_context(ctx)
-  #TODO: non specific mode?
-  # First gather all the library rules
-  golibs = depset()
+  # Gather all archives. Note that there may be multiple packages with the same
+  # importpath (e.g., multiple vendored libraries, internal tests).
+  direct_archives = []
+  transitive_archives = []
   for dep in ctx.attr.deps:
-    golibs += get_archive(dep).transitive
+    archive = get_archive(dep)
+    direct_archives.append(archive.data)
+    transitive_archives.append(archive.transitive)
+  archives = depset(direct = direct_archives, transitive = transitive_archives)
 
-  # Now scan them for sources
-  seen_libs = {}
-  seen_paths = {}
-  outputs = []
-  packages = []
-  for golib in as_iterable(golibs):
-    if not golib.importpath:
-      print("Missing importpath on {}".format(golib.label))
-      continue
-    if golib.importpath in seen_libs:
-      # We found two different library rules that map to the same import path
-      # This is legal in bazel, but we can't build a valid go path for it.
-      # TODO: we might be able to ignore this if the content is identical
-      print("""Duplicate package
-Found {} in
-  {}
-  {}
-""".format(golib.importpath, golib.label, seen_libs[golib.importpath].label))
-      # for now we don't fail if we see duplicate packages
-      # the most common case is the same source from two different workspaces
-      continue
-    seen_libs[golib.importpath] = golib
-    package_files = []
-    prefix = "src/" + golib.importpath + "/"
-    for src in golib.srcs:
-      outpath = prefix + src.basename
-      if outpath in seen_paths:
-        # If we see the same path twice, it's a fatal error
-        fail("Duplicate path {}".format(outpath))
-      seen_paths[outpath] = True
-      out = go.declare_file(go, path=outpath)
-      package_files += [out]
-      outputs += [out]
-      if ctx.attr.mode == "copy":
-        ctx.actions.expand_template(template=src, output=out, substitutions={})
-      elif ctx.attr.mode == "link":
-        ctx.actions.run_shell(
-            command='ln -s $(readlink "$1") "$2"',
-            arguments=[src.path, out.path],
-            mnemonic = "GoLn",
-            inputs=[src],
-            outputs=[out],
-        )
-      else:
-        fail("Invalid go path mode '{}'".format(ctx.attr.mode))
-    packages += [struct(
-      golib = golib,
-      dir = _tag(go, prefix, outputs),
-      files = package_files,
-    )]
-  gopath = _tag(go, "", outputs)
+  # Collect sources and data files from archives. Merge archives into packages.
+  pkg_map = {}  # map from package path to structs
+  for archive in as_iterable(archives):
+    importpath, pkgpath = effective_importpath_pkgpath(archive)
+    if importpath == "":
+      continue  # synthetic archive or inferred location
+    out_prefix = "src/" + pkgpath
+    pkg = struct(
+        importpath = importpath,
+        dir = out_prefix,
+        srcs = as_list(archive.orig_srcs),
+        data = as_list(archive.data_files),
+    )
+    if pkgpath in pkg_map:
+      _merge_pkg(pkg_map[pkgpath], pkg)
+    else:
+      pkg_map[pkgpath] = pkg
+
+  # Build a manifest file that includes all files to copy/link/zip.
+  inputs = []
+  manifest_entries = []
+  manifest_entry_map = {}
+  for pkg in pkg_map.values():
+    for f in pkg.srcs:
+      dst = pkg.dir + "/" + f.basename
+      _add_manifest_entry(manifest_entries, manifest_entry_map, inputs, f, dst)
+  if ctx.attr.include_data:
+    for pkg in pkg_map.values():
+      for f in pkg.data:
+        parts = f.path.split("/")
+        if "testdata" in parts:
+          i = parts.index("testdata")
+          dst = pkg.dir + "/" + "/".join(parts[i:])
+        else:
+          dst = pkg.dir + "/" + f.basename
+        _add_manifest_entry(manifest_entries, manifest_entry_map, inputs, f, dst)
+  for f in ctx.files.data:
+    _add_manifest_entry(manifest_entries, manifest_entry_map, inputs,
+                        f, f.basename)
+  manifest_file = ctx.actions.declare_file(ctx.label.name + "~manifest")
+  manifest_entries_json = [e.to_json() for e in manifest_entries]
+  manifest_content = "[\n  " + ",\n  ".join(manifest_entries_json) + "\n]"
+  ctx.actions.write(manifest_file, manifest_content)
+  inputs.append(manifest_file)
+
+  # Execute the builder
+  if ctx.attr.mode == "archive":
+    out = ctx.actions.declare_file(ctx.label.name + ".zip")
+    out_path = out.path
+    out_short_path = out.short_path
+    outputs = [out]
+    out_file = out
+  elif ctx.attr.mode == "copy":
+    out = ctx.actions.declare_directory(ctx.label.name)
+    out_path = out.path
+    out_short_path = out.short_path
+    outputs = [out]
+    out_file = out
+  else:  # link
+    # Declare individual outputs in link mode. Symlinks can't point outside
+    # tree artifacts.
+    outputs = [ctx.actions.declare_file(ctx.label.name + "/" + e.dst)
+               for e in manifest_entries]
+    tag = ctx.actions.declare_file(ctx.label.name + "/.tag")
+    ctx.actions.write(tag, "")
+    out_path = tag.dirname
+    out_short_path = tag.short_path.rpartition("/")[0]
+    out_file = tag
+  args = [
+      "-manifest=" + manifest_file.path,
+      "-out=" + out_path,
+      "-mode=" + ctx.attr.mode,
+  ]
+  ctx.actions.run(
+      outputs = outputs,
+      inputs = inputs,
+      mnemonic = "GoPath",
+      executable = ctx.executable._go_path,
+      arguments = args,
+  )
+
   return [
       DefaultInfo(
           files = depset(outputs),
+          runfiles = ctx.runfiles(files = outputs),
       ),
       GoPath(
-        gopath = gopath,
-        packages = packages,
-        srcs = outputs,
-      )
+          gopath = out_short_path,
+          gopath_file = out_file,
+          packages = pkg_map.values(),
+      ),
   ]
 
-go_path = go_rule(
+go_path = rule(
     _go_path_impl,
     attrs = {
-        "deps": attr.label_list(providers = [GoLibrary]),
+        "deps": attr.label_list(providers = [GoArchive]),
+        "data": attr.label_list(
+            allow_files = True,
+            cfg = "data",
+        ),
         "mode": attr.string(
             default = "copy",
             values = [
-                "link",
+                "archive",
                 "copy",
+                "link",
             ],
+        ),
+        "include_data": attr.bool(default = True),
+        "_go_path": attr.label(
+            default = "@io_bazel_rules_go//go/tools/builders:go_path",
+            executable = True,
+            cfg = "host",
         ),
     },
 )
+
+def _merge_pkg(x, y):
+  x_srcs = {f.path: None for f in x.srcs}
+  x_data = {f.path: None for f in x.data}
+  x.srcs.extend([f for f in y.srcs if f.path not in x_srcs])
+  x.data.extend([f for f in y.data if f.path not in x_srcs])
+
+def _add_manifest_entry(entries, entry_map, inputs, src, dst):
+  if dst in entry_map:
+    if entry_map[dst] != src.path:
+      fail("{}: references multiple files ({} and {})".format(dst, entry_map[dst], src.path))
+    return
+  entries.append(struct(src = src.path, dst = dst))
+  entry_map[dst] = src.path
+  inputs.append(src)

@@ -34,9 +34,9 @@ def emit_archive(go, source=None):
 
   if source == None: fail("source is a required parameter")
 
-  cover_vars = []
-  if go.cover:
-    source, cover_vars = go.cover(go, source)
+  covered = bool(go.cover and go.coverdata and source.cover)
+  if covered:
+    source = go.cover(go, source)
   split = split_srcs(source.srcs)
   lib_name = source.library.importmap + ".a"
   out_lib = go.declare_file(go, path=lib_name)
@@ -45,15 +45,22 @@ def emit_archive(go, source=None):
 
   extra_objects = []
   for src in split.asm:
-    extra_objects.append(go.asm(go, source=src, hdrs=split.headers))
+    # include other .s as inputs, since they may be #included.
+    # This may result in multiple copies of symbols defined in included
+    # files, but go build allows it, so we do, too.
+    headers = split.headers + split.asm
+    extra_objects.append(go.asm(go, source = src, hdrs = headers))
 
   direct = [get_archive(dep) for dep in source.deps]
   runfiles = source.runfiles
+  data_files = runfiles.files
   for a in direct:
     runfiles = runfiles.merge(a.runfiles)
     if a.source.mode != go.mode: fail("Archive mode does not match {} is {} expected {}".format(a.data.label, mode_string(a.source.mode), mode_string(go.mode)))
+  if covered:
+    direct.append(go.coverdata)
 
-  if len(extra_objects) == 0 and source.cgo_archive == None:
+  if len(extra_objects) == 0 and not source.cgo_archives:
     go.compile(go,
         sources = split.go,
         importpath = source.library.importmap,
@@ -76,15 +83,18 @@ def emit_archive(go, source=None):
         in_lib = partial_lib,
         out_lib = out_lib,
         objects = extra_objects,
-        archive = source.cgo_archive,
+        archives = source.cgo_archives,
     )
   data = GoArchiveData(
       name = source.library.name,
       label = source.library.label,
       importpath = source.library.importpath,
       importmap = source.library.importmap,
+      pathtype = source.library.pathtype,
       file = out_lib,
       srcs = as_tuple(source.srcs),
+      orig_srcs = as_tuple(source.orig_srcs),
+      data_files = as_tuple(data_files),
       searchpath = searchpath,
   )
   x_defs = dict(source.x_defs)
@@ -100,6 +110,5 @@ def emit_archive(go, source=None):
       x_defs = x_defs,
       cgo_deps = sets.union(source.cgo_deps, *[a.cgo_deps for a in direct]),
       cgo_exports = sets.union(source.cgo_exports, *[a.cgo_exports for a in direct]),
-      cover_vars = sets.union(cover_vars, *[a.cover_vars for a in direct]),
       runfiles = runfiles,
   )

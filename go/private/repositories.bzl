@@ -30,12 +30,15 @@ def go_rules_dependencies():
   # Gazelle and dependencies. These are needed for go_repository.
   # TODO(jayconrod): delete all of these when we've migrated everyone to
   # Gazelle's version of go_repository.
-  _maybe(http_archive,
+  _maybe(git_repository,
       name = "bazel_gazelle",
-      urls = ["https://github.com/bazelbuild/bazel-gazelle/releases/download/0.9/bazel-gazelle-0.9.tar.gz"],
-      sha256 = "0103991d994db55b3b5d7b06336f8ae355739635e0c2379dea16b8213ea5a223",
+      remote = "https://github.com/bazelbuild/bazel-gazelle",
+      commit = "7f30ba724af9495b221e2df0f5ac58511179485f", # master as of 2018-05-08
   )
 
+  # Old version of buildtools, before breaking API changes. Old versions of
+  # gazelle (0.9) need this. Newer versions vendor this library, so it's only
+  # needed by old versions.
   _maybe(http_archive,
       name = "com_github_bazelbuild_buildtools",
       # master, as of 2017-08-14
@@ -69,8 +72,10 @@ def go_rules_dependencies():
   _maybe(git_repository,
       name = "com_github_golang_protobuf",
       remote = "https://github.com/golang/protobuf",
-      commit = "925541529c1fa6821df4e44ce2723319eb2be768",  # v1.0.0, as of 2018-02-16
+      commit = "b4deda0973fb4c70b50d226b1af49f3da59f5265",  # v1.1.0, as of 2018-05-07
       overlay = manifest["com_github_golang_protobuf"],
+      # build_file_proto_mode = "legacy",
+      # importpath = "github.com/golang/protobuf",
   )
   _maybe(http_archive,
       name = "com_google_protobuf",
@@ -82,9 +87,10 @@ def go_rules_dependencies():
   _maybe(git_repository,
       name = "com_github_mwitkow_go_proto_validators",
       remote = "https://github.com/mwitkow/go-proto-validators",
-      commit = "a55ca57f374a8846924b030f534d8b8211508cf0",  # master, as of 2017-11-24
+      commit = "0950a79900071e9f3f5979b78078c599376422fd",  # master, as of 2018-05-07
       overlay = manifest["com_github_mwitkow_go_proto_validators"],
       # build_file_proto_mode = "disable",
+      # importpath = "github.com/mwitkow/go-proto-validators",
   )
   _maybe(git_repository,
       name = "com_github_gogo_protobuf",
@@ -97,45 +103,42 @@ def go_rules_dependencies():
       name = "gogo_special_proto",
   )
 
-  # Only used by deprecated go_proto_library implementation
-  _maybe(http_archive,
-      name = "com_github_google_protobuf",
-      urls = ["https://github.com/google/protobuf/archive/v3.4.0.tar.gz"],
-      strip_prefix = "protobuf-3.4.0",
-  )
-
   # GRPC dependencies
   _maybe(git_repository,
       name = "org_golang_x_net",
       remote = "https://github.com/golang/net",
-      commit = "136a25c244d3019482a795d728110278d6ba09a4",  # master as of 2018-02-16
+      commit = "640f4622ab692b87c2f3a94265e6f579fe38263d",  # master as of 2018-05-07
       overlay = manifest["org_golang_x_net"],
+      # importpath = "golang.org/x/net",
   )
   _maybe(git_repository,
       name = "org_golang_x_text",
       remote = "https://github.com/golang/text",
-      commit = "c4d099d611ac3ded35360abf03581e13d91c828f",  # v0.2.0, latest as of 2018-02-16
+      commit = "f21a4dfb5e38f5895301dc265a8def02365cc3d0",  # v0.3.0, latest as of 2018-04-02
       overlay = manifest["org_golang_x_text"],
   )
   _maybe(git_repository,
       name = "org_golang_google_grpc",
       remote = "https://github.com/grpc/grpc-go",
-      commit = "8e4536a86ab602859c20df5ebfd0bd4228d08655",  # v1.10.0, latest as of 2018-02-16
+      commit = "d11072e7ca9811b1100b80ca0269ac831f06d024",  # v1.10.3, latest as of 2018-05-07
       overlay = manifest["org_golang_google_grpc"],
       # build_file_proto_mode = "disable",
+      # importpath = "google.golang.org/grpc",
   )
   _maybe(git_repository,
       name = "org_golang_google_genproto",
       remote = "https://github.com/google/go-genproto",
-      commit = "2b5a72b8730b0b16380010cfe5286c42108d88e7",  # master on 2018-02-16
+      commit = "86e600f69ee4704c6efbf6a2a40a5c10700e76c2",  # master as of 2018-05-07
       overlay = manifest["org_golang_google_genproto"],
+      # build_file_proto_mode = "disable",
+      # importpath = "google.golang.org/genproto",
   )
 
   # Needed for examples
   _maybe(git_repository,
       name = "com_github_golang_glog",
       remote = "https://github.com/golang/glog",
-      commit = "23def4e6c14b4da8ac2ed8007337bc5eb5007998",
+      commit = "23def4e6c14b4da8ac2ed8007337bc5eb5007998",  # master as of 2018-04-02
       overlay = manifest["com_github_golang_glog"],
   )
   _maybe(git_repository,

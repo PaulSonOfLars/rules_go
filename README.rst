@@ -5,8 +5,8 @@ Go rules for Bazel_
 .. _Bazel: https://bazel.build/
 .. |travis| image:: https://travis-ci.org/bazelbuild/rules_go.svg?branch=master
   :target: https://travis-ci.org/bazelbuild/rules_go
-.. |jenkins| image:: http://ci.bazel.io/buildStatus/icon?job=PR/rules_go
-  :target: http://ci.bazel.io/view/Bazel%20bootstrap%20and%20maintenance/job/PR/job/rules_go/
+.. |bazelci| image:: https://badge.buildkite.com/7ff4772cf73f716565daee2e0e6f4c8d8dee2b086caf27b6a8.svg
+  :target: https://buildkite.com/bazel/golang-rules-go
 .. _gazelle: https://github.com/bazelbuild/bazel-gazelle
 .. _github.com/bazelbuild/bazel-gazelle: https://github.com/bazelbuild/bazel-gazelle
 .. _vendoring: Vendoring.md
@@ -17,6 +17,8 @@ Go rules for Bazel_
 .. _go_test: go/core.rst#go_test
 .. _go_download_sdk: go/toolchains.rst#go_download_sdk
 .. _go_register_toolchains: go/toolchains.rst#go_register_toolchains
+.. _go_proto_library: proto/core.rst#go_proto_library
+.. _go_proto_compiler: proto/core.rst#go_proto_compiler
 .. _bazel-go-discuss: https://groups.google.com/forum/#!forum/bazel-go-discuss
 .. _Bazel labels: https://docs.bazel.build/versions/master/build-ref.html#labels
 .. _#265: https://github.com/bazelbuild/rules_go/issues/265
@@ -27,48 +29,64 @@ Go rules for Bazel_
 .. _Running Bazel Tests on Travis CI: https://kev.inburke.com/kevin/bazel-tests-on-travis-ci/
 .. _korfuri/bazel-travis Use Bazel with Travis CI: https://github.com/korfuri/bazel-travis
 .. _Travis configuration file: .travis.yml
+.. _rules_go and Gazelle roadmap: roadmap.rst
+.. _Deprecation schedule: deprecation.rst
 
 .. ;; And now we continue with the actual content
 
 ======== =========
-Travis   Jenkins
+Travis   Bazel CI
 ======== =========
-|travis| |jenkins|
+|travis| |bazelci|
 ======== =========
+
+Mailing list: `bazel-go-discuss`_
 
 Announcements
 -------------
 
-January 11, 2018
-  Release `0.9.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.9.0>`_
-  is now available.
-January 2, 2018
-  The old Gazelle subtree (//go/tools/gazelle) will be removed soon. See
-  `#1199`_ for details. Please migrate to
-  `github.com/bazelbuild/bazel-gazelle`_.
-December 14, 2017
-  Gazelle has moved to a new repository,
-  `github.com/bazelbuild/bazel-gazelle`_. Please try it out and let us know
-  what you think.
-December 13, 2017
-  Release `0.8.1 <https://github.com/bazelbuild/rules_go/releases/tag/0.8.1>`_
+April 30, 2018
+  Releases `0.11.1 <https://github.com/bazelbuild/rules_go/releases/tag/0.11.1>`_
+  and `0.10.4 <https://github.com/bazelbuild/rules_go/releases/tag/0.10.4>`_
+  are now available.
+April 23, 2018
+  Some rules will be deprecated or removed in the next release. See
+  `Deprecation schedule`_ for details.
+April 16, 2018
+  Release `0.11.0 <https://github.com/bazelbuild/rules_go/releases/tag/0.11.0>`_
   is now available.
 
-.. contents::
+Contents
+--------
 
+.. contents:: .
+  :depth: 2
 
-Quick links
------------
+Documentation
+~~~~~~~~~~~~~
 
-* Mailing list: `bazel-go-discuss`_
-* `Core api <go/core.rst>`_
+* `Core API <go/core.rst>`_
+  
+  * `go_binary`_
+  * `go_library`_
+  * `go_test`_
+
 * `Workspace rules <go/workspace.rst>`_
-* `Toolchains <go/toolchains.rst>`_
 * `Protobuf rules <proto/core.rst>`_
+
+  * `go_proto_library`_
+  * `go_proto_compiler`_
+
+* `Toolchains <go/toolchains.rst>`_
 * `Extra rules <go/extras.rst>`_
 * `Deprecated rules <go/deprecated.rst>`_
 * `Build modes <go/modes.rst>`_
 
+Quick links
+~~~~~~~~~~~
+
+* `rules_go and Gazelle roadmap`_
+* `Deprecation schedule`_
 
 Overview
 --------
@@ -90,9 +108,8 @@ They currently do not support (in order of importance):
   go_default_library)
 * C/C++ interoperation except cgo (swig etc.)
 * coverage
-* test sharding
 
-:Note: The latest version of these rules (0.9.0) requires Bazel ≥ 0.8.0 to work.
+:Note: The latest version of these rules (0.11.1) requires Bazel ≥ 0.10.0 to work.
 
 The ``master`` branch is only guaranteed to work with the latest version of Bazel.
 
@@ -110,8 +127,8 @@ Setup
 
     http_archive(
         name = "io_bazel_rules_go",
-        url = "https://github.com/bazelbuild/rules_go/releases/download/0.9.0/rules_go-0.9.0.tar.gz",
-        sha256 = "4d8d6244320dd751590f9100cf39fd7a4b75cd901e1f3ffdfd6f048328883695",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.11.1/rules_go-0.11.1.tar.gz",
+        sha256 = "1868ff68d6079e31b2f09b828b58d62e57ca8e9636edff699247c9108518570b",
     )
     load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
     go_rules_dependencies()
@@ -156,13 +173,13 @@ build files automatically using gazelle_.
 
     http_archive(
         name = "io_bazel_rules_go",
-        url = "https://github.com/bazelbuild/rules_go/releases/download/0.9.0/rules_go-0.9.0.tar.gz",
-        sha256 = "4d8d6244320dd751590f9100cf39fd7a4b75cd901e1f3ffdfd6f048328883695",
+        url = "https://github.com/bazelbuild/rules_go/releases/download/0.11.1/rules_go-0.11.1.tar.gz",
+        sha256 = "1868ff68d6079e31b2f09b828b58d62e57ca8e9636edff699247c9108518570b",
     )
     http_archive(
         name = "bazel_gazelle",
-        url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.9/bazel-gazelle-0.9.tar.gz",
-        sha256 = "0103991d994db55b3b5d7b06336f8ae355739635e0c2379dea16b8213ea5a223",
+        url = "https://github.com/bazelbuild/bazel-gazelle/releases/download/0.11.0/bazel-gazelle-0.11.0.tar.gz",
+        sha256 = "92a3c59734dad2ef85dc731dbcb2bc23c4568cded79d4b87ebccd787eb89e8d0",
     )
     load("@io_bazel_rules_go//go:def.bzl", "go_rules_dependencies", "go_register_toolchains")
     go_rules_dependencies()
@@ -325,6 +342,54 @@ Gazelle will automatically add a ``data`` attribute like the one above if you
 have a ``testdata`` directory *unless* it contains buildable .go files or
 build files, in which case, ``testdata`` is treated as a normal package.
 
+How do I cross-compile?
+~~~~~~~~~~~~~~~~~~~~~~~
+
+You can cross-compile by setting the ``--platforms`` flag on the command line.
+For example:
+
+.. code::
+
+  $ bazel build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //cmd
+
+Platform-specific sources with build tags or filename suffixes are filtered
+automatically at compile time. You can selectively include platform-specific
+dependencies with ``select`` expressions (Gazelle does this automatically).
+
+.. code:: bzl
+
+  go_library(
+      name = "go_default_library",
+      srcs = [
+          "foo_linux.go",
+          "foo_windows.go",
+      ],
+      deps = select({
+          "@io_bazel_rules_go//go/platform:linux_amd64": [
+              "//bar_linux:go_default_library",
+          ],
+          "@io_bazel_rules_go//go/platform:windows_amd64": [
+              "//bar_windows:go_default_library",
+          ],
+          "//conditions:default": [],
+      }),
+  )
+
+rules_go can generate pure Go binaries for any platform the Go SDK supports. If
+your project includes cgo code, has C/C++ dependencies, or requires external
+linking, you'll need to `write a CROSSTOOL file
+<https://github.com/bazelbuild/bazel/wiki/Yet-Another-CROSSTOOL-Writing-Tutorial>`_
+for your toolchain and set the ``--cpu`` flag on the command line, in addition
+to setting ``--platforms``. You'll also need to set ``pure = "off"`` on your
+``go_binary``. We don't fully support this yet, but people have gotten this to
+work in some cases.
+
+In some cases, you may want to set the ``goos`` and ``goarch`` attributes of
+``go_binary``. This will cross-compile a binary for a specific platform.
+This is necessary when you need to produce multiple binaries for different 
+platforms in a single build. However, note that ``select`` expressions will
+not work correctly when using these attributes.
+
 How do I access ``go_binary`` executables from ``go_test``?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -344,7 +409,6 @@ For example:
   go_binary(
       name = "cmd",
       srcs = ["cmd.go"],
-      importpath = "example.com/cmd",
   )
 
   go_test(
@@ -352,10 +416,27 @@ For example:
       srcs = ["cmd_test.go"],
       args = ["$(location :cmd)"],
       data = [":cmd"],
-      importpath = "example.com/test",
   )
 
 See `reproducible_binary`_ for a complete example.
+
+Alternatively, you can set the ``out`` attribute of `go_binary`_ to a specific
+filename. Note that when ``out`` is set, the binary won't be cached when
+changing configurations.
+
+.. code:: bzl
+
+  go_binary(
+      name = "cmd",
+      srcs = ["cmd.go"],
+      out = "cmd",
+  )
+
+  go_test(
+      name = "cmd_test",
+      srcs = ["cmd_test.go"],
+      data = [":cmd"],
+  )
 
 How do I run Bazel on Travis CI?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

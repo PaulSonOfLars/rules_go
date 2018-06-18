@@ -17,39 +17,39 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"go/build"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 func run(args []string) error {
+	// Parse arguments.
+	builderArgs, toolArgs := splitArgs(args)
+	flags := flag.NewFlagSet("GoCompile", flag.ExitOnError)
 	unfiltered := multiFlag{}
 	deps := multiFlag{}
-	search := multiFlag{}
 	importmap := multiFlag{}
-	flags := flag.NewFlagSet("compile", flag.ContinueOnError)
 	goenv := envFlags(flags)
 	flags.Var(&unfiltered, "src", "A source file to be filtered and compiled")
 	flags.Var(&deps, "dep", "Import path of a direct dependency")
-	flags.Var(&search, "I", "Search paths of a direct dependency")
 	flags.Var(&importmap, "importmap", "Import maps of a direct dependency")
-	trimpath := flags.String("trimpath", "", "The base of the paths to trim")
 	output := flags.String("o", "", "The output object file to write")
 	packageList := flags.String("package_list", "", "The file containing the list of standard library packages")
 	testfilter := flags.String("testfilter", "off", "Controls test package filtering")
-	// process the args
-	if err := flags.Parse(args); err != nil {
+	if err := flags.Parse(builderArgs); err != nil {
 		return err
 	}
-	if err := goenv.update(); err != nil {
+	if err := goenv.checkFlags(); err != nil {
 		return err
 	}
 
+	// Filter sources using build constraints.
 	var matcher func(f *goMetadata) bool
 	switch *testfilter {
 	case "off":
@@ -68,8 +68,7 @@ func run(args []string) error {
 		return fmt.Errorf("Invalid test filter %q", *testfilter)
 	}
 	// apply build constraints to the source list
-	bctx := goenv.BuildContext()
-	all, err := readFiles(bctx, unfiltered)
+	all, err := readFiles(build.Default, unfiltered)
 	if err != nil {
 		return err
 	}
@@ -79,16 +78,20 @@ func run(args []string) error {
 			files = append(files, f)
 		}
 	}
-	if len(files) <= 0 {
-		return ioutil.WriteFile(*output, []byte(""), 0644)
+	if len(files) == 0 {
+		// We need to run the compiler to create a valid archive, even if there's
+		// nothing in it. GoPack will complain if we try to add assembly or cgo
+		// objects.
+		emptyPath := filepath.Join(filepath.Dir(*output), "_empty.go")
+		if err := ioutil.WriteFile(emptyPath, []byte("package empty\n"), 0666); err != nil {
+			return err
+		}
+		files = append(files, &goMetadata{filename: emptyPath})
 	}
 
-	goargs := []string{"tool", "compile"}
-	goargs = append(goargs, "-trimpath", abs(*trimpath))
-	for _, path := range search {
-		goargs = append(goargs, "-I", abs(path))
-	}
+	// Check that the filtered sources don't import anything outside of deps.
 	strictdeps := deps
+	var importmapArgs []string
 	for _, mapping := range importmap {
 		i := strings.Index(mapping, "=")
 		if i < 0 {
@@ -99,33 +102,29 @@ func run(args []string) error {
 		if source == "" || actual == "" || source == actual {
 			continue
 		}
-		goargs = append(goargs, "-importmap", mapping)
+		importmapArgs = append(importmapArgs, "-importmap", mapping)
 		strictdeps = append(strictdeps, source)
 	}
-	goargs = append(goargs, "-pack", "-o", *output)
-	goargs = append(goargs, flags.Args()...)
-	for _, f := range files {
-		goargs = append(goargs, f.filename)
-	}
-
-	// Check that the filtered sources don't import anything outside of deps.
-	if err := checkDirectDeps(bctx, files, strictdeps, *packageList); err != nil {
+	if err := checkDirectDeps(build.Default, files, strictdeps, *packageList); err != nil {
 		return err
 	}
 
-	env := os.Environ()
-	env = append(env, goenv.Env()...)
-	cmd := exec.Command(goenv.Go, goargs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = env
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("error running compiler: %v", err)
+	// Compile the filtered files.
+	goargs := []string{"tool", "compile"}
+	goargs = append(goargs, importmapArgs...)
+	goargs = append(goargs, "-pack", "-o", *output)
+	goargs = append(goargs, toolArgs...)
+	goargs = append(goargs, "--")
+	for _, f := range files {
+		goargs = append(goargs, f.filename)
 	}
-	return nil
+	absArgs(goargs, []string{"I", "o", "trimpath"})
+	return goenv.runGoCommand(goargs)
 }
 
 func main() {
+	log.SetFlags(0) // no timestamp
+	log.SetPrefix("GoCompile: ")
 	if err := run(os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
@@ -149,7 +148,7 @@ func checkDirectDeps(bctx build.Context, files []*goMetadata, deps []string, pac
 		depSet[d] = true
 	}
 
-	var errs depsError
+	derr := depsError{known: deps}
 	for _, f := range files {
 		for _, path := range f.imports {
 			if path == "C" || stdlib[path] || isRelative(path) {
@@ -159,26 +158,43 @@ func checkDirectDeps(bctx build.Context, files []*goMetadata, deps []string, pac
 				continue
 			}
 			if !depSet[path] {
-				errs = append(errs, fmt.Errorf("%s: import of %s, which is not a direct dependency", f.filename, path))
+				derr.missing = append(derr.missing, missingDep{f.filename, path})
 			}
 		}
 	}
-	if len(errs) > 0 {
-		return errs
+	if len(derr.missing) > 0 {
+		return derr
 	}
 	return nil
 }
 
-type depsError []error
+type depsError struct {
+	missing []missingDep
+	known   []string
+}
 
-var _ error = depsError(nil)
+type missingDep struct {
+	filename, imp string
+}
+
+var _ error = depsError{}
 
 func (e depsError) Error() string {
-	errorStrings := make([]string, len(e))
-	for i, err := range e {
-		errorStrings[i] = err.Error()
+	buf := bytes.NewBuffer(nil)
+	fmt.Fprintf(buf, "missing strict dependencies:\n")
+	for _, dep := range e.missing {
+		fmt.Fprintf(buf, "\t%s: import of %q\n", dep.filename, dep.imp)
 	}
-	return "missing strict dependencies:\n\t" + strings.Join(errorStrings, "\n\t")
+	if len(e.known) == 0 {
+		fmt.Fprintln(buf, "No dependencies were provided.")
+	} else {
+		fmt.Fprintln(buf, "Known dependencies are:")
+		for _, imp := range e.known {
+			fmt.Fprintf(buf, "\t%s\n", imp)
+		}
+	}
+	fmt.Fprint(buf, "Check that imports in Go sources match importpath attributes in deps.")
+	return buf.String()
 }
 
 func isRelative(path string) bool {

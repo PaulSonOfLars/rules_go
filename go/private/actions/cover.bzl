@@ -15,6 +15,7 @@
 load(
     "@io_bazel_rules_go//go/private:providers.bzl",
     "GoSource",
+    "effective_importpath_pkgpath",
 )
 load(
     "@io_bazel_rules_go//go/private:common.bzl",
@@ -26,27 +27,42 @@ def emit_cover(go, source):
 
   if source == None: fail("source is a required parameter")
   if not source.cover:
-    return source, []
+    return source
 
   covered = []
-  cover_vars = []
+  covered_src_map = dict(source.orig_src_map)
   for src in source.srcs:
     if not src.basename.endswith(".go") or src not in source.cover:
       covered.append(src)
       continue
+    orig = covered_src_map.get(src, src)
+    _, pkgpath = effective_importpath_pkgpath(source.library)
+    srcname = pkgpath + "/" + orig.basename if pkgpath else orig.path
+
     cover_var = "Cover_" + src.basename[:-3].replace("-", "_").replace(".", "_")
-    cover_vars.append("{}={}={}".format(cover_var, src.short_path, source.library.importpath))
     out = go.declare_file(go, path=cover_var, ext='.cover.go')
+    covered_src_map.pop(src, None)
+    covered_src_map[out] = orig
     covered.append(out)
+
     args = go.args(go)
-    args.add(["--", "--mode=set", "-var=%s" % cover_var, "-o", out, src])
+    args.add([
+      "-o=" + out.path,
+      "-var=" + cover_var,
+      "-src=" + src.path,
+      "-srcname=" + srcname,
+      "--",
+      "-mode=set",
+    ])
     go.actions.run(
         inputs = [src] + go.stdlib.files,
         outputs = [out],
         mnemonic = "GoCover",
         executable = go.builders.cover,
         arguments = [args],
+        env = go.env,
     )
   members = structs.to_dict(source)
   members["srcs"] = covered
-  return GoSource(**members), cover_vars
+  members["orig_src_map"] = covered_src_map
+  return GoSource(**members)

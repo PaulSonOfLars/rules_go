@@ -1,23 +1,28 @@
 Core go rules
 =============
 
-.. _test_filter: https://bazel.build/versions/master/docs/bazel-user-manual.html#flag--test_filter
-.. _test_arg: https://bazel.build/versions/master/docs/bazel-user-manual.html#flag--test_arg
-.. _gazelle: tools/gazelle/README.rst
-.. _build constraints: http://golang.org/pkg/go/build/
+.. _test_filter: https://docs.bazel.build/versions/master/user-manual.html#flag--test_filter
+.. _test_arg: https://docs.bazel.build/versions/master/user-manual.html#flag--test_arg
+.. _Gazelle: https://github.com/bazelbuild/bazel-gazelle
 .. _GoLibrary: providers.rst#GoLibrary
 .. _GoSource: providers.rst#GoSource
 .. _GoArchive: providers.rst#GoArchive
+.. _GoPath: providers.rst#GoPath
 .. _cgo: http://golang.org/cmd/cgo/
 .. _"Make variable": https://docs.bazel.build/versions/master/be/make-variables.html
 .. _Bourne shell tokenization: https://docs.bazel.build/versions/master/be/common-definitions.html#sh-tokenization
 .. _data dependencies: https://docs.bazel.build/versions/master/build-ref.html#data
 .. _cc library deps: https://docs.bazel.build/versions/master/be/c-cpp.html#cc_library.deps
+.. _shard_count: https://docs.bazel.build/versions/master/be/common-definitions.html#test.shard_count
 .. _pure: modes.rst#pure
 .. _static: modes.rst#static
 .. _goos: modes.rst#goos
 .. _goarch: modes.rst#goarch
 .. _mode attributes: modes.rst#mode-attributes
+.. _write a CROSSTOOL file: https://github.com/bazelbuild/bazel/wiki/Yet-Another-CROSSTOOL-Writing-Tutorial
+.. _build constraints: https://golang.org/pkg/go/build/#hdr-Build_Constraints
+.. _select: https://docs.bazel.build/versions/master/be/functions.html#select
+.. _config_setting: https://docs.bazel.build/versions/master/be/general.html#config_setting
 
 .. role:: param(kbd)
 .. role:: type(emphasis)
@@ -85,7 +90,7 @@ Binaries that depend on this library may also set this value.
 
     go_binary(
         name = "cmd",
-        srcs = ["main.go"], 
+        srcs = ["main.go"],
         deps = ["//version:go_default_library"],
         x_defs = {"example.com/repo/version.Version", "0.9"},
     )
@@ -158,7 +163,7 @@ Attributes
 +----------------------------+-----------------------------+---------------------------------------+
 | A unique name for this rule.                                                                     |
 |                                                                                                  |
-| To interoperated cleanly with gazelle_ right now this should be :value:`go_default_library`.     |
+| To interoperate cleanly with Gazelle_ right now this should be :value:`go_default_library`.      |
 +----------------------------+-----------------------------+---------------------------------------+
 | :param:`importpath`        | :type:`string`              | :value:`""`                           |
 +----------------------------+-----------------------------+---------------------------------------+
@@ -230,6 +235,18 @@ Attributes
 | Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
 | Only valid if :param:`cgo` = :value:`True`.                                                      |
 +----------------------------+-----------------------------+---------------------------------------+
+| :param:`cxxopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C++ compilation command.                                             |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`cppopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C/C++ preprocessor command.                                          |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
 | :param:`clinkopts`         | :type:`string_list`         | :value:`[]`                           |
 +----------------------------+-----------------------------+---------------------------------------+
 | List of flags to add to the C link command.                                                      |
@@ -282,12 +299,6 @@ Attributes
 |                                                                                                  |
 | This should be named the same as the desired name of the generated binary .                      |
 +----------------------------+-----------------------------+---------------------------------------+
-| :param:`importpath`        | :type:`string`              | :value:`""`                           |
-+----------------------------+-----------------------------+---------------------------------------+
-| The import path of this binary. If unspecified, the binary will have an implicit                 |
-| dependency on ``//:go_prefix``, and the import path will be derived from the prefix              |
-| and the binary's label.                                                                          |
-+----------------------------+-----------------------------+---------------------------------------+
 | :param:`srcs`              | :type:`label_list`          | :value:`None`                         |
 +----------------------------+-----------------------------+---------------------------------------+
 | The list of Go source files that are compiled to create the binary.                              |
@@ -314,6 +325,12 @@ Attributes
 | by the binary, or other programs needed by it. See `data dependencies`_ for more information     |
 | about how to depend on and use data files.                                                       |
 +----------------------------+-----------------------------+---------------------------------------+
+| :param:`importpath`        | :type:`string`              | :value:`""`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| The import path of this binary. Binaries can't actually be imported, but this                    |
+| may be used by `go_path`_ and other tools to report the location of source                       |
+| files. This may be inferred from embedded libraries.                                             |
++----------------------------+-----------------------------+---------------------------------------+
 | :param:`pure`              | :type:`string`              | :value:`auto`                         |
 +----------------------------+-----------------------------+---------------------------------------+
 | This is one of the `mode attributes`_ that controls whether to link in pure_ mode.               |
@@ -328,21 +345,29 @@ Attributes
 +----------------------------+-----------------------------+---------------------------------------+
 | This is one of the `mode attributes`_ that controls which goos_ to compile and link for.         |
 |                                                                                                  |
-| If set to anything other than :value:`auto` this overrideds the default as set by the current    |
-| target platform, and allows for single builds to make binaries for multiple architectures.       |
+| If set to anything other than :value:`auto` this overrides the default as set by the current     |
+| target platform and allows for single builds to make binaries for multiple architectures.        |
 |                                                                                                  |
 | Because this has no control over the cc toolchain, it does not work for cgo, so if this          |
 | attribute is set then :param:`pure` must be set to :value:`on`.                                  |
+|                                                                                                  |
+| This attribute has several limitations and should only be used in situations where the           |
+| ``--platforms`` flag does not work. See `Cross compilation`_ and `Note on goos and goarch        |
+| attributes`_ for more information.                                                               |
 +----------------------------+-----------------------------+---------------------------------------+
 | :param:`goarch`            | :type:`string`              | :value:`auto`                         |
 +----------------------------+-----------------------------+---------------------------------------+
 | This is one of the `mode attributes`_ that controls which goarch_ to compile and link for.       |
 |                                                                                                  |
-| If set to anything other than :value:`auto` this overrideds the default as set by the current    |
-| target platform, and allows for single builds to make binaries for multiple architectures.       |
+| If set to anything other than :value:`auto` this overrides the default as set by the current     |
+| target platform and allows for single builds to make binaries for multiple architectures.        |
 |                                                                                                  |
 | Because this has no control over the cc toolchain, it does not work for cgo, so if this          |
 | attribute is set then :param:`pure` must be set to :value:`on`.                                  |
+|                                                                                                  |
+| This attribute has several limitations and should only be used in situations where the           |
+| ``--platforms`` flag does not work. See `Cross compilation`_ and `Note on goos and goarch        |
+| attributes`_ for more information.                                                               |
 +----------------------------+-----------------------------+---------------------------------------+
 | :param:`gc_goopts`         | :type:`string_list`         | :value:`[]`                           |
 +----------------------------+-----------------------------+---------------------------------------+
@@ -379,11 +404,32 @@ Attributes
 | Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
 | Only valid if :param:`cgo` = :value:`True`.                                                      |
 +----------------------------+-----------------------------+---------------------------------------+
+| :param:`cxxopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C++ compilation command.                                             |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`cppopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C/C++ preprocessor command.                                          |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
 | :param:`clinkopts`         | :type:`string_list`         | :value:`[]`                           |
 +----------------------------+-----------------------------+---------------------------------------+
 | List of flags to add to the C link command.                                                      |
 | Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
 | Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`out`               | :type:`string`              | :value:`""`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| Sets the output filename for the generated executable. When set, ``go_binary``                   |
+| will write this file without mode-specific directory prefixes, without                           |
+| linkmode-specific prefixes like "lib", and without platform-specific suffixes                    |
+| like ".exe". Note that without a mode-specific directory prefix, the                             |
+| output file (but not its dependencies) will be invalidated in Bazel's cache                      |
+| when changing configurations.                                                                    |
 +----------------------------+-----------------------------+---------------------------------------+
 
 go_test
@@ -411,7 +457,7 @@ Attributes
 +----------------------------+-----------------------------+---------------------------------------+
 | A unique name for this rule.                                                                     |
 |                                                                                                  |
-| To interoperated cleanly with gazelle_ right now this should be :value:`go_default_test` for     |
+| To interoperate cleanly with Gazelle_ right now this should be :value:`go_default_test` for      |
 | internal tests and :value:`go_default_xtest` for external tests.                                 |
 +----------------------------+-----------------------------+---------------------------------------+
 | :param:`importpath`        | :type:`string`              | :value:`""`                           |
@@ -446,6 +492,12 @@ Attributes
 | by the binary, or other programs needed by it. See `data dependencies`_ for more information     |
 | about how to depend on and use data files.                                                       |
 +----------------------------+-----------------------------+---------------------------------------+
+| :param:`importpath`        | :type:`string`              | :value:`""`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| The import path of this test. Tests can't actually be imported, but this                         |
+| may be used by `go_path`_ and other tools to report the location of source                       |
+| files. This may be inferred from embedded libraries.                                             |
++----------------------------+-----------------------------+---------------------------------------+
 | :param:`gc_goopts`         | :type:`string_list`         | :value:`[]`                           |
 +----------------------------+-----------------------------+---------------------------------------+
 | List of flags to add to the Go compilation command when using the gc compiler.                   |
@@ -481,6 +533,18 @@ Attributes
 | Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
 | Only valid if :param:`cgo` = :value:`True`.                                                      |
 +----------------------------+-----------------------------+---------------------------------------+
+| :param:`cxxopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C++ compilation command.                                             |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`cppopts`           | :type:`string_list`         | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| List of flags to add to the C/C++ preprocessor command.                                          |
+| Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
+| Only valid if :param:`cgo` = :value:`True`.                                                      |
++----------------------------+-----------------------------+---------------------------------------+
 | :param:`clinkopts`         | :type:`string_list`         | :value:`[]`                           |
 +----------------------------+-----------------------------+---------------------------------------+
 | List of flags to add to the C link command.                                                      |
@@ -496,6 +560,15 @@ Attributes
 | behaviour of ``go test`` so it is easy to write compatible tests.                                |
 |                                                                                                  |
 | Setting it to :value:`.` makes the test behave the normal way for a bazel test.                  |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`shard_count`       | :type:`integer`             | :value:`None`                         |
++----------------------------+-----------------------------+---------------------------------------+
+| Non-negative integer less than or equal to 50, optional.                                         |
+|                                                                                                  |
+| Specifies the number of parallel shards to run the test. Test methods will be split across the   |
+| shards in a round-robin fashion.                                                                 |
+|                                                                                                  |
+| For more details on this attribute, consult the official Bazel documentation for shard_count_.   |
 +----------------------------+-----------------------------+---------------------------------------+
 
 To write an internal test, reference the library being tested with the :param:`embed`
@@ -603,9 +676,173 @@ Attributes
 | Subject to `"Make variable"`_ substitution and `Bourne shell tokenization`_.                     |
 +----------------------------+-----------------------------+---------------------------------------+
 
+go_path
+~~~~~~~
+
+``go_path`` builds a directory structure that can be used with tools that
+understand the ``GOPATH`` directory layout. This directory structure can be
+built by zipping, copying, or linking files.
+
+``go_path`` can depend on one or more Go targets (i.e., `go_library`_,
+`go_binary`_, or `go_test`_). It will include packages from those targets, as
+well as their transitive dependencies. Packages will be in subdirectories named
+after their ``importpath`` or ``importmap`` attributes under a ``src/``
+directory.
+
+Attributes
+^^^^^^^^^^
+
++----------------------------+-----------------------------+---------------------------------------+
+| **Name**                   | **Type**                    | **Default value**                     |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`name`              | :type:`string`              | |mandatory|                           |
++----------------------------+-----------------------------+---------------------------------------+
+| A unique name for this rule.                                                                     |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`deps`              | :type:`label_list`          | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| A list of targets that build Go packages. A directory will be generated from                     |
+| files in these targets and their transitive dependencies. All targets must                       |
+| provide GoArchive_ (`go_library`_, `go_binary`_, `go_test`_, and similar                         |
+| rules have this).                                                                                |
+|                                                                                                  |
+| Only targets with explicit ``importpath`` attributes will be included in the                     |
+| generated directory. Synthetic packages (like the main package produced by                       |
+| `go_test`_) and packages with inferred import paths will not be                                  |
+| included. The values of ``importmap`` attributes may influence the placement                     |
+| of packages within the generated directory (for example, in vendor                               |
+| directories).                                                                                    |
+|                                                                                                  |
+| The generated directory will contain original source files, including .go,                       |
+| .s, .h, and .c files compiled by cgo. It will not contain files generated by                     |
+| tools like cover and cgo, but it will contain generated files passed in                          |
+| ``srcs`` attributes like .pb.go files. The generated directory will also                         |
+| contain runfiles found in ``data`` attributes.                                                   |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`data`              | :type:`label_list`          | :value:`[]`                           |
++----------------------------+-----------------------------+---------------------------------------+
+| A list of targets producing data files that will be stored next to the                           |
+| ``src/`` directory. Useful for including things like licenses and readmes.                       |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`mode`              | :type:`string`              | :value:`"copy"`                       |
++----------------------------+-----------------------------+---------------------------------------+
+| Determines how the generated directory is provided. May be one of:                               |
+|                                                                                                  |
+| * ``"archive"``: The generated directory is packaged as a single .zip file.                      |
+| * ``"copy"``: The generated directory is a single tree artifact. Source files                    |
+|   are copied into the tree.                                                                      |
+| * ``"link"``: Source files are symlinked into the tree. All of the symlink                       |
+|   files are provided as separate output files.                                                   |
++----------------------------+-----------------------------+---------------------------------------+
+| :param:`include_data`      | :type:`bool`                | :value:`True`                         |
++----------------------------+-----------------------------+---------------------------------------+
+| When true, data files referenced by libraries, binaries, and tests will be                       |
+| included in the output directory. Files listed in the :param:`data` attribute                    |
+| for this rule will be included regardless of this attribute.                                     |
++----------------------------+-----------------------------+---------------------------------------+
+
 go_rule
 ~~~~~~~
 
 This is a wrapper around the normal rule function.
 It modifies the attrs and toolchains attributes to make sure everything needed to build a go_context
 is present.
+
+Cross compilation
+-----------------
+
+rules_go can cross-compile Go projects to any platform the Go toolchain
+supports. The simplest way to do this is by setting the ``--platforms`` flag on
+the command line.
+
+.. code::
+
+    $ bazel build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //my/project
+
+You can replace ``linux_amd64`` in the example above with any valid
+GOOS / GOARCH pair. To list all platforms, run this command:
+
+.. code::
+
+    $ bazel query 'kind(platform, @io_bazel_rules_go//go/toolchain:all)'
+
+By default, cross-compilation will cause Go targets to be built in "pure mode",
+which disables cgo; cgo files will not be compiled, and C/C++ dependencies will
+not be compiled or linked.
+
+Cross-compiling cgo code is possible, but not fully supported. You will need to
+`write a CROSSTOOL file`_ that describes your C/C++ toolchain. You'll need to
+ensure it works by building ``cc_binary`` and ``cc_library`` targets with the
+``--cpu`` command line flag set. Then, to build a mixed Go / C / C++ project,
+add ``pure = "off"`` to your ``go_binary`` target and run Bazel with ``--cpu``
+and ``--platforms``.
+
+Platform-specific dependencies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When cross-compiling, you may have some platform-specific sources and
+dependencies. Source files from all platforms can be mixed freely in a single
+``srcs`` list. Source files are filtered using `build constraints`_ (filename
+suffixes and ``+build`` tags) before being passed to the compiler.
+
+Platform-specific dependencies are another story. For example, if you are
+building a binary for Linux, and it has dependency that should only be built
+when targeting Windows, you will need to filter it out using Bazel `select`_
+expressions:
+
+.. code:: bzl
+
+    go_binary(
+        name = "cmd",
+        srcs = [
+            "foo_linux.go",
+            "foo_windows.go",
+        ],
+        deps = [
+            # platform agnostic dependencies
+            "//bar:go_default_library",
+        ] + select({
+            # OS-specific dependencies
+            "@io_bazel_rules_go//go/platform:linux": [
+                "//baz_linux:go_default_library",
+            ],
+            "@io_bazel_rules_go//go/platform:windows": [
+                "//quux_windows:go_default_library",
+            ],
+            "//conditions:default": [],
+        }),
+    )
+
+``select`` accepts a dictionary argument. The keys are labels that reference
+`config_setting`_ rules. The values are lists of labels. Exactly one of these
+lists will be selected, depending on the target configuration. rules_go has
+pre-declared ``config_setting`` rules for each OS, architecture, and
+OS-architecture pair. For a full list, run this command:
+
+.. code::
+
+    $ bazel query 'kind(config_setting, @io_bazel_rules_go//go/platform:all)'
+
+`Gazelle`_ will generate dependencies in this format automatically.
+
+Note on goos and goarch attributes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is possible to cross-compile ``go_binary`` and ``go_test`` targets by
+setting the ``goos`` and ``goarch`` attributes to the target platform. These
+attributes were added for projects that cross-compile binaries for multiple
+platforms in the same build, then package the resulting executables.
+
+Bazel does not have a native understanding of the ``goos`` and ``goarch``
+attributes, so values do not affect `select`_ expressions. This means if you use
+these attributes with a target that has any transitive platform-specific
+dependencies, ``select`` may choose the wrong set of dependencies. Consequently,
+if you use ``goos`` or ``goarch`` attributes, you will not be able to safely
+generate build files with Gazelle or ``go_repository``.
+
+Additionally, setting ``goos`` and ``goarch`` will not automatically disable
+cgo. You should almost always set ``pure = "on"`` together with these
+attributes.
+
+Because of these limitations, it's almost always better to cross-compile by
+setting ``--platforms`` on the command line instead.

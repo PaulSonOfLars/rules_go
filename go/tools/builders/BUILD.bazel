@@ -69,6 +69,12 @@ go_tool_binary(
 )
 
 go_tool_binary(
+    name = "go_path",
+    srcs = ["go_path.go"],
+    visibility = ["//visibility:public"],
+)
+
+go_tool_binary(
     name = "info",
     srcs = [
         "env.go",
@@ -81,6 +87,7 @@ go_tool_binary(
 go_tool_binary(
     name = "link",
     srcs = [
+        "ar.go",
         "env.go",
         "flags.go",
         "link.go",
@@ -121,6 +128,7 @@ go_tool_binary(
 go_tool_binary(
     name = "go-protoc",
     srcs = [
+        "env.go",
         "flags.go",
         "protoc.go",
     ],
@@ -134,6 +142,14 @@ go_tool_binary(
         "flags.go",
         "replicate.go",
         "stdlib.go",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_tool_binary(
+    name = "filter_buildid",
+    srcs = [
+        "filter_buildid.go",
     ],
     visibility = ["//visibility:public"],
 )

@@ -6,11 +6,13 @@ Go providers
 .. _go_library: core.rst#go_library
 .. _go_binary: core.rst#go_binary
 .. _go_test: core.rst#go_test
+.. _go_path: core.rst#go_path
 .. _cc_library: https://docs.bazel.build/versions/master/be/c-cpp.html#cc_library
 .. _flatbuffers: http://google.github.io/flatbuffers/
 .. _static linking: modes.rst#building-static-binaries
 .. _race detector: modes.rst#using-the-race-detector
 .. _runfiles: https://docs.bazel.build/versions/master/skylark/lib/runfiles.html
+.. _File: https://docs.bazel.build/versions/master/skylark/lib/File.html
 
 .. role:: param(kbd)
 .. role:: type(emphasis)
@@ -84,8 +86,8 @@ This is a non build mode specific provider.
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`pathtype`              | :type:`string`                                                  |
 +--------------------------------+-----------------------------------------------------------------+
-| Information about the source of the importpath.                                                  |
-| It's values can be                                                                               |
+| Information about the source of the importpath. Possible values are:                             |
+|                                                                                                  |
 | :value:`explicit`                                                                                |
 |     The importpath was explicitly supplied by the user and the library is importable.            |
 |     This is the normal case.                                                                     |
@@ -95,10 +97,9 @@ This is a non build mode specific provider.
 |     This is normally true for rules that do not expect to be compiled directly to a library,     |
 |     embeded into another rule instead (source generators)                                        |
 | :value:`export`                                                                                  |
-|     The importpath is used for generated file names, but the library should not be imported by   |
-|     that name.                                                                                   |
-|     This is the case for the implied "main" library of a binary or test, where the import path   |
-|     is not relevant as the package cannot be imported.                                           |
+|     The importpath was explicitly supplied by the user, but the library is                       |
+|     not importable. This is the case for binaries and tests. The importpath                      |
+|     may still be useful for `go_path`_ and other rules.                                          |
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`resolve`               | :type:`function`                                                |
 +--------------------------------+-----------------------------------------------------------------+
@@ -123,10 +124,6 @@ In general, only rules_go should need to build or handle these.
 +--------------------------------+-----------------------------------------------------------------+
 | The sources to compile into the archive.                                                         |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`cover`                 | :type:`list of File`                                            |
-+--------------------------------+-----------------------------------------------------------------+
-| The set of sources that should have coverage applied.                                            |
-+--------------------------------+-----------------------------------------------------------------+
 | :param:`x_defs`                | :type:`string_dict`                                             |
 +--------------------------------+-----------------------------------------------------------------+
 | Map of defines to add to the go link command.                                                    |
@@ -144,7 +141,7 @@ In general, only rules_go should need to build or handle these.
 +--------------------------------+-----------------------------------------------------------------+
 | The set of files needed by code in these sources at runtime.                                     |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`cgo_deps`              | :type:`list of cc_library`                                      |
+| :param:`cgo_deps`              | :type:`list of File`                                            |
 +--------------------------------+-----------------------------------------------------------------+
 | The direct cgo dependencies of this library.                                                     |
 +--------------------------------+-----------------------------------------------------------------+
@@ -152,9 +149,9 @@ In general, only rules_go should need to build or handle these.
 +--------------------------------+-----------------------------------------------------------------+
 | The exposed cc headers for these sources.                                                        |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`cgo_archive`           | :type:`File`                                                    |
+| :param:`cgo_archives`          | :type:`list of File`                                            |
 +--------------------------------+-----------------------------------------------------------------+
-| The cgo archive to merge into a go archive for these sources.                                    |
+| The cgo archives to merge into a go archive for these sources.                                   |
 +--------------------------------+-----------------------------------------------------------------+
 
 
@@ -178,6 +175,20 @@ GoArchiveData represents the compiled form of a package.
 +--------------------------------+-----------------------------------------------------------------+
 | The import path for this library. Will always be set.                                            |
 +--------------------------------+-----------------------------------------------------------------+
+| :param:`importmap`             | :type:`string`                                                  |
++--------------------------------+-----------------------------------------------------------------+
+| The package path for this library. The compiler and linker use this to                           |
+| disambiguoate packages with the same ``importpath``. It's usually the same                       |
+| as ``importpath``, but is frequently different for vendored libraries.                           |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`pathtype`              | :type:`string`                                                  |
++--------------------------------+-----------------------------------------------------------------+
+| Indicates how ``importpath`` was determined. May be one of:                                      |
+|                                                                                                  |
+| * ``"explicit"``: was explicitly set.                                                            |
+| * ``"inferred"``: was inferred based on label name.                                              |
+| * ``"export"``: a special name for synthetic packages. Not importable.                           |
++--------------------------------+-----------------------------------------------------------------+
 | :param:`file`                  | :type:`compiled archive file`                                   |
 +--------------------------------+-----------------------------------------------------------------+
 | The archive file representing the library compiled in a specific :param:`mode` ready for linking |
@@ -185,11 +196,27 @@ GoArchiveData represents the compiled form of a package.
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`srcs`                  | :type:`list of File`                                            |
 +--------------------------------+-----------------------------------------------------------------+
-| The sources compiled into the archive.                                                           |
+| The .go sources compiled into the archive. May have been generated or                            |
+| transformed with tools like cgo and cover.                                                       |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`orig_srcs`             | :type:`list of File`                                            |
++--------------------------------+-----------------------------------------------------------------+
+| The unmodified sources provided to the rule, including .go, .s, .h, .c files.                    |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`orig_src_map`          | :type:`dict mapping File to File`                               |
++--------------------------------+-----------------------------------------------------------------+
+| A map from generated source files to the original files (in ``orig_srcs``)                       |
+| they were generated from. Generated sources may be absent if they were not                       |
+| generated from individual files in ``orig_srcs``.                                                |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`data_files`            | :type:`list of File`                                            |
++--------------------------------+-----------------------------------------------------------------+
+| Data files which should be available at runtime to binaries and tests built                      |
+| from this archive.                                                                               |
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`searchpath`            | :type:`string`                                                  |
 +--------------------------------+-----------------------------------------------------------------+
-| The search path entry under which the :param:`lib` would be found.                               |
+| **Deprecated:** The search path entry under which the :param:`lib` would be found.               |
 +--------------------------------+-----------------------------------------------------------------+
 
 GoArchive
@@ -210,21 +237,22 @@ This is used when compiling and linking dependant libraries or binaries.
 +--------------------------------+-----------------------------------------------------------------+
 | The non transitive data for this archive.                                                        |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`direct`                | :type:`depset of GoLibrary`                                     |
+| :param:`direct`                | :type:`list of GoArchive`                                       |
 +--------------------------------+-----------------------------------------------------------------+
-| The direct depencancies of the library.                                                          |
+| The direct dependencies of this archive.                                                         |
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`searchpaths`           | :type:`depset of string`                                        |
 +--------------------------------+-----------------------------------------------------------------+
-| The transitive set of search paths needed to link with this archive.                             |
+| **Deprecated:** The transitive set of search paths needed to link with this archive.             |
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`libs`                  | :type:`depset of File`                                          |
 +--------------------------------+-----------------------------------------------------------------+
 | The transitive set of libraries needed to link with this archive.                                |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`transitive`            | :type:`depset(GoLibrary)`                                       |
+| :param:`transitive`            | :type:`depset of GoArchiveData`                                 |
 +--------------------------------+-----------------------------------------------------------------+
-| The full transitive set of GoArchiveData's  depended on, including this one.                     |
+| The full set of transitive dependencies. This includes ``data`` for this                         |
+| archive and all ``data`` members transitively reachable through ``direct``.                      |
 +--------------------------------+-----------------------------------------------------------------+
 | :param:`x_defs`                | :type:`string_dict`                                             |
 +--------------------------------+-----------------------------------------------------------------+
@@ -239,11 +267,44 @@ This is used when compiling and linking dependant libraries or binaries.
 +--------------------------------+-----------------------------------------------------------------+
 | The the transitive set of c headers needed to reference exports of this archive.                 |
 +--------------------------------+-----------------------------------------------------------------+
-| :param:`cover_vars`            | :type:`list of string`                                          |
-+--------------------------------+-----------------------------------------------------------------+
-| The cover variables added to this library.                                                       |
-+--------------------------------+-----------------------------------------------------------------+
 | :param:`runfiles`              | runfiles_                                                       |
 +--------------------------------+-----------------------------------------------------------------+
 | The files needed to run anything that includes this library.                                     |
 +--------------------------------+-----------------------------------------------------------------+
+
+GoPath
+~~~~~~
+
+GoPath is produced by the `go_path`_ rule. It gives a list of packages used to
+build the ``go_path`` directory and provides a list of original files for
+each package.
+
++--------------------------------+-----------------------------------------------------------------+
+| **Name**                       | **Type**                                                        |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`gopath`                | :type:`string`                                                  |
++--------------------------------+-----------------------------------------------------------------+
+| The short path to the output file or directory. Useful for constructing                          |
+| ``runfiles`` paths.                                                                              |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`gopath_file`           | :type:`File`                                                    |
++--------------------------------+-----------------------------------------------------------------+
+| A Bazel File_ that points to the output directory.                                               |
+|                                                                                                  |
+| * In ``archive`` mode, this is the archive.                                                      |
+| * In ``copy`` mode, this is the output directory.                                                |
+| * In ``link`` mode, this is an empty file inside the output directory, so                        |
+|   you need to use .dirname to get the path to the directory.                                     |
++--------------------------------+-----------------------------------------------------------------+
+| :param:`packages`              | :type:`list of struct`                                          |
++--------------------------------+-----------------------------------------------------------------+
+| A list of structs representing packages used to build the ``go_path``                            |
+| directory. Each struct has the following fields:                                                 |
+|                                                                                                  |
+| * ``importpath``: the import path of the package.                                                |
+| * ``dir``: the subdirectory of the package within the ``go_path``, including                     |
+|   the ``src/`` prefix. May different from ``importpath`` due to vendoring.                       |
+| * ``srcs``: list of source ``File``s.                                                            |
+| * ``data``: list of data ``File``s.                                                              |
++--------------------------------+-----------------------------------------------------------------+
+
