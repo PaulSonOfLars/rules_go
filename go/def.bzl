@@ -17,6 +17,10 @@ load(
     "go_context",
 )
 load(
+    "@io_bazel_rules_go//go/private:go_repository.bzl",
+    "go_repository",
+)
+load(
     "@io_bazel_rules_go//go/private:providers.bzl",
     _GoArchive = "GoArchive",
     _GoArchiveData = "GoArchiveData",
