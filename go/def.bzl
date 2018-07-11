@@ -17,10 +17,6 @@ load(
     "go_context",
 )
 load(
-    "@io_bazel_rules_go//go/private:go_repository.bzl",
-    "go_repository",
-)
-load(
     "@io_bazel_rules_go//go/private:providers.bzl",
     _GoArchive = "GoArchive",
     _GoArchiveData = "GoArchiveData",
@@ -42,10 +38,6 @@ load(
 load(
     "@io_bazel_rules_go//go/private:go_toolchain.bzl",
     "go_toolchain",
-)
-load(
-    "@io_bazel_rules_go//go/private:rules/prefix.bzl",
-    "go_prefix",
 )
 load(
     "@io_bazel_rules_go//go/private:rules/wrappers.bzl",
@@ -80,7 +72,7 @@ load(
 
 # Current version or next version to be tagged. Gazelle and other tools may
 # check this to determine compatibility.
-RULES_GO_VERSION = "0.12.1"
+RULES_GO_VERSION = "0.13.0"
 
 GoLibrary = _GoLibrary
 """See go/providers.rst#GoLibrary for full documentation."""
