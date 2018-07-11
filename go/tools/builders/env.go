@@ -19,11 +19,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+)
+
+var (
+	// cgoEnvVars is the list of all cgo environment variable
+	cgoEnvVars = []string{"CGO_CFLAGS", "CGO_CXXFLAGS", "CGO_CPPFLAGS", "CGO_LDFLAGS"}
+	// cgoAbsEnvFlags are all the flags that need absolute path in cgoEnvVars
+	cgoAbsEnvFlags = []string{"-I", "-L", "-isysroot", "-isystem", "-iquote", "-include", "-gcc-toolchain", "--sysroot"}
 )
 
 // env holds a small amount of Go environment and toolchain information
@@ -33,8 +42,9 @@ import (
 // See ./README.rst for more information about handling arguments and
 // environment variables.
 type env struct {
-	// go_ is the path to the go executable
-	go_ string
+	// sdk is the path to the Go SDK, which contains tools for the host
+	// platform. This may be different than GOROOT.
+	sdk string
 
 	// verbose indicates whether subprocess command lines should be printed.
 	verbose bool
@@ -44,7 +54,7 @@ type env struct {
 // configured with those flags.
 func envFlags(flags *flag.FlagSet) *env {
 	env := &env{}
-	flags.StringVar(&env.go_, "go", "", "The path to the go tool.")
+	flags.StringVar(&env.sdk, "sdk", "", "Path to the Go SDK.")
 	flags.Var(&tagFlag{}, "tags", "List of build tags considered true.")
 	flags.BoolVar(&env.verbose, "v", false, "Whether subprocess command lines should be printed")
 	return env
@@ -53,28 +63,60 @@ func envFlags(flags *flag.FlagSet) *env {
 // checkFlags checks whether env flags were set to valid values. checkFlags
 // should be called after parsing flags.
 func (e *env) checkFlags() error {
-	if e.go_ == "" {
-		return errors.New("-go was not specified")
+	if e.sdk == "" {
+		return errors.New("-sdk was not set")
 	}
 	return nil
 }
 
-// runGoCommand executes a subprocess through the go tool. The subprocess will
-// inherit stdout, stderr, and the environment from this process.
-func (e *env) runGoCommand(goargs []string) error {
-	cmd := exec.Command(e.go_, goargs...)
+// goTool returns a slice containing the path to an executable at
+// $GOROOT/pkg/$GOOS_$GOARCH/$tool and additional arguments.
+func (e *env) goTool(tool string, args ...string) []string {
+	platform := fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
+	toolPath := filepath.Join(e.sdk, "pkg", "tool", platform, tool)
+	if runtime.GOOS == "windows" {
+		toolPath += ".exe"
+	}
+	return append([]string{toolPath}, args...)
+}
+
+// goCmd returns a slice containing the path to the go executable
+// and additional arguments.
+func (e *env) goCmd(cmd string, args ...string) []string {
+	exe := filepath.Join(e.sdk, "bin", "go")
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	return append([]string{exe, cmd}, args...)
+}
+
+// runCommand executes a subprocess that inherits stdout, stderr, and the
+// environment from this process.
+func (e *env) runCommand(args []string) error {
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return runAndLogCommand(cmd, e.verbose)
 }
 
-// runGoCommandToFile executes a subprocess through the go tool and writes
-// the output to the given writer.
-func (e *env) runGoCommandToFile(w io.Writer, goargs []string) error {
-	cmd := exec.Command(e.go_, goargs...)
+// runCommandToFile executes a subprocess and writes the output to the given
+// writer.
+func (e *env) runCommandToFile(w io.Writer, args []string) error {
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = w
 	cmd.Stderr = os.Stderr
 	return runAndLogCommand(cmd, e.verbose)
+}
+
+func absEnv(envNameList []string, argList []string) error {
+	for _, envName := range envNameList {
+		splitedEnv := strings.Fields(os.Getenv(envName))
+		absArgs(splitedEnv, argList)
+		if err := os.Setenv(envName, strings.Join(splitedEnv, " ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
@@ -90,13 +132,30 @@ func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
 // splitArgs splits a list of command line arguments into two parts: arguments
 // that should be interpreted by the builder (before "--"), and arguments
 // that should be passed through to the underlying tool (after "--").
+// A group consisting of a single argument that is prefixed with an '@', is
+// treated as a pointer to a params file, which is read and its contents used
+// as the arguments.
 func splitArgs(args []string) (builderArgs []string, toolArgs []string) {
 	for i, arg := range args {
 		if arg == "--" {
-			return args[:i], args[i+1:]
+
+			return readParamsFile(args[:i]), readParamsFile(args[i+1:])
 		}
 	}
-	return args, nil
+	return readParamsFile(args), nil
+}
+
+// readParamsFile replaces the passed in slice with the contents of a params
+// file, if the slice is a single string that starts with an '@'.
+// Errors reading the file are ignored and the original slice is returned.
+func readParamsFile(args []string) []string {
+	if len(args) == 1 && strings.HasPrefix(args[0], "@") {
+		content, err := ioutil.ReadFile(args[0][1:])
+		if err == nil {
+			args = strings.Split(string(content), "\n")
+		}
+	}
+	return args
 }
 
 // abs returns the absolute representation of path. Some tools/APIs require
@@ -121,29 +180,21 @@ func absArgs(args []string, flags []string) {
 			absNext = false
 			continue
 		}
-		if !strings.HasPrefix(args[i], "-") {
-			continue
-		}
-		var flag, value string
-		var separate bool
-		if j := strings.IndexByte(args[i], '='); j >= 0 {
-			flag = args[i][:j]
-			value = args[i][j+1:]
-		} else {
-			separate = true
-			flag = args[i]
-		}
-		flag = strings.TrimLeft(args[i], "-")
 		for _, f := range flags {
-			if flag != f {
+			if !strings.HasPrefix(args[i], f) {
 				continue
 			}
-			if separate {
+			possibleValue := args[i][len(f):]
+			if len(possibleValue) == 0 {
 				absNext = true
-			} else {
-				value = abs(value)
-				args[i] = fmt.Sprintf("-%s=%s", flag, value)
+				break
 			}
+			separator := ""
+			if possibleValue[0] == '=' {
+				possibleValue = possibleValue[1:]
+				separator = "="
+			}
+			args[i] = fmt.Sprintf("%s%s%s", f, separator, abs(possibleValue))
 			break
 		}
 	}

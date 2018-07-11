@@ -73,7 +73,7 @@ func run(args []string) error {
 	}
 
 	// generate any additional link options we need
-	goargs := []string{"tool", "link"}
+	goargs := goenv.goTool("link")
 	depsSeen := make(map[string]string)
 	for _, d := range deps {
 		parts := strings.Split(d, "=")
@@ -94,11 +94,11 @@ This will be an error in the future.`, pkgPath, label, conflictLabel)
 		depsSeen[pkgPath] = label
 
 		pkgSuffix := string(os.PathSeparator) + filepath.FromSlash(pkgPath) + ".a"
-		if !strings.HasSuffix(pkgFile, pkgSuffix) {
+		if !strings.HasSuffix(filepath.FromSlash(pkgFile), pkgSuffix) {
 			return fmt.Errorf("package file name %q must have searchable suffix %q", pkgFile, pkgSuffix)
 		}
 		searchPath := pkgFile[:len(pkgFile)-len(pkgSuffix)]
-		goargs = append(goargs, "-L", searchPath)
+		goargs = append(goargs, "-L", abs(searchPath))
 	}
 	for _, xdef := range xstamps {
 		split := strings.SplitN(xdef, "=", 2)
@@ -120,7 +120,7 @@ This will be an error in the future.`, pkgPath, label, conflictLabel)
 	// add in the unprocess pass through options
 	goargs = append(goargs, toolArgs...)
 	goargs = append(goargs, *main)
-	if err := goenv.runGoCommand(goargs); err != nil {
+	if err := goenv.runCommand(goargs); err != nil {
 		return err
 	}
 

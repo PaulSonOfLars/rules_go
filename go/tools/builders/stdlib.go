@@ -21,6 +21,7 @@ import (
 	"go/build"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -32,6 +33,7 @@ func run(args []string) error {
 	out := flags.String("out", "", "Path to output go root")
 	race := flags.Bool("race", false, "Build in race mode")
 	shared := flags.Bool("shared", false, "Build in shared mode")
+	dynlink := flags.Bool("dynlink", false, "Build in dynlink mode")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -56,8 +58,18 @@ func run(args []string) error {
 	// TODO(#1357): also take absolute paths of includes and other paths in flags.
 	os.Setenv("CC", abs(os.Getenv("CC")))
 
+	// Ensure paths are absolute.
+	absPaths := []string{}
+	for _, path := range filepath.SplitList(os.Getenv("PATH")) {
+		absPaths = append(absPaths, abs(path))
+	}
+	os.Setenv("PATH", strings.Join(absPaths, string(os.PathListSeparator)))
+
+	// Strip path prefix from source files in debug information.
+	os.Setenv("CGO_CFLAGS", os.Getenv("CGO_CFLAGS")+" -fdebug-prefix-map="+abs(".")+"=")
+
 	// Build the commands needed to build the std library in the right mode
-	installArgs := []string{"install", "-toolexec", abs(*filterBuildid)}
+	installArgs := goenv.goCmd("install", "-toolexec", abs(*filterBuildid))
 	if len(build.Default.BuildTags) > 0 {
 		installArgs = append(installArgs, "-tags", strings.Join(build.Default.BuildTags, ","))
 	}
@@ -71,6 +83,11 @@ func run(args []string) error {
 		gcflags = append(gcflags, "-shared")
 		ldflags = append(ldflags, "-shared")
 		asmflags = append(asmflags, "-shared")
+	}
+	if *dynlink {
+		gcflags = append(gcflags, "-dynlink")
+		ldflags = append(ldflags, "-dynlink")
+		asmflags = append(asmflags, "-dynlink")
 	}
 
 	// Since Go 1.10, an all= prefix indicates the flags should apply to the package
@@ -87,8 +104,14 @@ func run(args []string) error {
 	installArgs = append(installArgs, "-ldflags="+allSlug+strings.Join(ldflags, " "))
 	installArgs = append(installArgs, "-asmflags="+allSlug+strings.Join(asmflags, " "))
 
+	// Modifying CGO flags to use only absolute path
+	// because go is having its own sandbox, all CGO flags must use absolute path
+	if err := absEnv(cgoEnvVars, cgoAbsEnvFlags); err != nil {
+		return fmt.Errorf("error modifying cgo environment to absolute path: %v", err)
+	}
+
 	for _, target := range []string{"std", "runtime/cgo"} {
-		if err := goenv.runGoCommand(append(installArgs, target)); err != nil {
+		if err := goenv.runCommand(append(installArgs, target)); err != nil {
 			return err
 		}
 	}

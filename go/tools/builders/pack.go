@@ -29,7 +29,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
+	"path/filepath"
 	"os"
 	"strconv"
 	"strings"
@@ -55,9 +57,15 @@ func run(args []string) error {
 		return err
 	}
 
+	dir, err := ioutil.TempDir("", "go-pack")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+
 	names := map[string]struct{}{}
 	for _, archive := range archives {
-		archiveObjects, err := extractFiles(archive, names)
+		archiveObjects, err := extractFiles(archive, dir, names)
 		if err != nil {
 			return err
 		}
@@ -100,7 +108,7 @@ const (
 	entryLength = 60
 )
 
-func extractFiles(archive string, names map[string]struct{}) (files []string, err error) {
+func extractFiles(archive, dir string, names map[string]struct{}) (files []string, err error) {
 	f, err := os.Open(archive)
 	if err != nil {
 		return nil, err
@@ -130,6 +138,7 @@ func extractFiles(archive string, names map[string]struct{}) (files []string, er
 		}
 		name = simpleName(name, names)
 		names[name] = struct{}{}
+		name = filepath.Join(dir, name)
 		if err := extractFile(r, name, size); err != nil {
 			return nil, err
 		}
@@ -295,6 +304,7 @@ func simpleName(name string, names map[string]struct{}) string {
 }
 
 func appendFiles(goenv *env, archive string, files []string) error {
-	args := append([]string{"tool", "pack", "r", archive}, files...)
-	return goenv.runGoCommand(args)
+	args := goenv.goTool("pack", "r", archive)
+	args = append(args, files...)
+	return goenv.runCommand(args)
 }
